@@ -47,7 +47,7 @@ jobs:
           PYTHON_VERSION=3.14
           DEBIAN_VERSION=slim-trixie
 
-          TAGS="xomoxcc/minimatrix:latest,xomoxcc/minimatrix:python-${PYTHON_VERSION}-${DEBIAN_VERSION}"
+          TAGS="xomoxcc/wachtmeater:latest,xomoxcc/wachtmeater:python-${PYTHON_VERSION}-${DEBIAN_VERSION}"
 
           echo "buildtime=${BUILDTIME}" >> $GITHUB_OUTPUT
           echo "python_version=${PYTHON_VERSION}" >> $GITHUB_OUTPUT
