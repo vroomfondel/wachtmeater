@@ -1,0 +1,94 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+packages = ["wachtmeater"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[project]
+name = "wachtmeater"
+dynamic = ["version"]
+authors = [
+  { name="Henning Thieß", email="ht@xomox.cc" },
+]
+description = "MEATER BBQ probe monitor with Matrix alerts and SIP phone call notifications"
+readme = "README.md"
+requires-python = ">=3.14"
+license-files = ["LICENSE.md"]
+
+keywords = ["meater", "bbq", "monitoring", "matrix", "alerts", "sip", "kubernetes"]
+
+# https://pypi.org/classifiers/
+classifiers = [
+    "Development Status :: 4 - Beta",
+
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+
+    "Topic :: System :: Monitoring",
+
+    "License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)",
+    "Operating System :: POSIX :: Linux",
+]
+
+dependencies = [
+    'minimatrix>=0.0.1',
+    'loguru>=0.7.3',
+    'PyYAML>=6.0',
+    'requests>=2.31.0',
+    'playwright>=1.40.0',
+    'kubernetes>=28.0.0',
+    'matrix-nio[e2e]>=0.25.0',
+    'Jinja2>=3.1.0',
+    'websockets'
+]
+
+[project.urls]
+Homepage = "https://github.com/vroomfondel/wachtmeater"
+Repository = "https://github.com/vroomfondel/wachtmeater"
+Issues = "https://github.com/vroomfondel/wachtmeater/issues"
+
+[tool.hatch.version]
+path = "wachtmeater/__init__.py"
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.black]
+line-length = 120
+target-version = ["py313"]
+
+[tool.pytest.ini_options]
+python_files = "tests/*.py"
+
+[tool.mypy]
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+# plugins = ["pydantic.mypy"]
+exclude = '''(?x)(
+    \.venv
+    | venv
+    | \.pyi$
+    )'''
+
+[[tool.mypy.overrides]]
+module = ["cv2", "numpy", "pytesseract", "nio", "nio.*", "playwright", "playwright.*", "kubernetes", "kubernetes.*"]
+ignore_missing_imports = true
+
+
+[project.scripts]
+wachtmeater = "wachtmeater.cli:main"

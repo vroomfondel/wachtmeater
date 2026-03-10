@@ -1,0 +1,12 @@
+-r requirements.txt
+
+pre-commit==4.5.*
+
+# linting
+isort==7.0.*
+black==26.1.*
+mypy==1.19.*
+pytest==9.0.*
+types-PyYAML
+pygithub
+types-requests

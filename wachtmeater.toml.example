@@ -1,0 +1,86 @@
+[smtp]
+server   = "smtp.example.com"
+port     = 587
+user     = "user@example.com"
+password = "changeme"
+security = "starttls"
+from_email  = "Example User <user@example.com>"
+default_to  = "recipient@example.com"
+
+[imap]
+server       = "imap.example.com"
+port         = 143
+security     = "starttls"
+user         = "user@example.com"
+password     = "changeme"
+save_to_sent = true
+
+[ollama]
+api_key = "your-ollama-api-key-here"
+
+[meater]
+url            = "https://cooks.cloud.meater.com/cook/00000000-0000-0000-0000-000000000000"
+state_file_dir = "/data"
+# state_file_name = "meater-state-00000000-0000-0000-0000-000000000000.json"
+
+[browser]
+cdp_url        = "http://chrome-kasmvnc.kasmvnc.svc.cluster.local:9222"
+screenshot_dir = "/data"
+
+[sip]
+operator_url  = "http://sipstuff-operator.sipstuff.svc.cluster.local/call"
+recording_dir = "/data/recordings"
+dest          = "+491234567890"
+server        = "sip.example.com"
+port          = 5161
+transport     = "tls"
+srtp          = "mandatory"
+user          = "1234"
+password      = "changeme"
+
+
+[monitoring]
+ambient_temp_drop_threshold = 10
+check_interval              = 600
+stall_window                = 3
+cookend_error_threshold     = 3
+cookend_probe_removed_temp  = 35
+
+[alerts]
+# Initial alert defaults — applied only on first run (no existing state file).
+# Use Matrix commands (enable/disable) to change at runtime.
+tempalert_tempdown_enabled = true       # Ambient-Abfall vom Max (Feuer aus?)
+tempalert_ruhephase_enabled = false     # Abkühlung nach Cook
+ruhephase_target_temp = 0.0            # Zieltemp in C (0 = nicht gesetzt)
+tempalert_stall_enabled = false         # Plateau-Erkennung (Kerntemp steigt kaum)
+stall_min_delta = 1.0                   # Mindest-Anstieg in C über Stall-Window
+tempalert_wrap_enabled = false          # Einmaliger Wrap-Reminder
+wrap_target_temp = 0.0                  # Kerntemp in C (0 = nicht gesetzt)
+tempalert_ambient_range_enabled = false # Smoker zu heiss / zu kalt
+ambient_range_min = 0.0                 # Min Ambient in C (0 = nicht gesetzt)
+ambient_range_max = 0.0                 # Max Ambient in C (0 = nicht gesetzt)
+tempalert_cookend_enabled = true        # Auto-Erkennung: Cook beendet / Probe entfernt
+
+[matrix]
+# room           = "!exampleroom:matrix.example.com"
+room = ""
+auto_create_room_for_meater_uuid = true
+server_address = "http://synapse.matrix.svc.cluster.local:8008"
+user           = "@meater-watcher:matrix.example.com"
+homeserver     = "http://synapse.matrix.svc.cluster.local:8008"
+password       = "changeme"
+crypto_store_path = "/data/crypto_store"
+pitmaster = "@pit-claas-master:matrix.example.com"
+
+[auth]
+method              = "jwt"
+keycloak_url        = "https://keycloak.example.com"
+keycloak_realm      = "matrix"
+keycloak_client_id  = "synapse-oauth"
+keycloak_client_secret = "changeme"
+jwt_login_type      = "com.famedly.login.token.oauth"
+
+[k8s]
+image       = "xomoxcc/wachtmeater:latest"
+job_command = ["wachtmeater", "watcher"]
+namespace   = "meater"

@@ -1,0 +1,68 @@
+[browser]
+cdp_url        = "{{ browser.cdp_url }}"
+screenshot_dir = "{{ browser.screenshot_dir }}"
+
+[meater]
+url             = "{{ meater_url }}"
+state_file_dir  = "/data"
+state_file_name = "meater-state-{{ meater_uuid }}.json"
+
+[sip]
+operator_url       = "{{ sip.operator_url }}"
+recording_dir      = "{{ sip.recording_dir }}"
+dest               = "{{ sip.dest }}"
+server             = "{{ sip.server }}"
+port               = {{ sip.port }}
+transport          = "{{ sip.transport }}"
+srtp               = "{{ sip.srtp }}"
+user               = "{{ sip.user }}"
+password           = "{{ sip.password }}"
+call_pre_delay     = {{ sip.call_pre_delay }}
+call_post_delay    = {{ sip.call_post_delay }}
+call_inter_delay   = {{ sip.call_inter_delay }}
+call_repeat_announcement = {{ sip.call_repeat_announcement }}
+call_transcribe    = {{ sip.call_transcribe | tojson }}
+call_wait_for_silence = {{ sip.call_wait_for_silence }}
+call_verbose       = {{ sip.call_verbose | tojson }}
+
+[monitoring]
+ambient_temp_drop_threshold = {{ monitoring.ambient_temp_drop_threshold }}
+check_interval              = {{ monitoring.check_interval }}
+stall_window                = {{ monitoring.stall_window }}
+cookend_error_threshold     = {{ monitoring.cookend_error_threshold }}
+cookend_probe_removed_temp  = {{ monitoring.cookend_probe_removed_temp }}
+
+[smtp]
+server     = "{{ smtp.server }}"
+port       = {{ smtp.port }}
+user       = "{{ smtp.user }}"
+password   = "{{ smtp.password }}"
+security   = "{{ smtp.security }}"
+from_email = "{{ smtp.from_email }}"
+default_to = "{{ smtp.default_to }}"
+
+[imap]
+server       = "{{ imap.server }}"
+port         = {{ imap.port }}
+security     = "{{ imap.security }}"
+user         = "{{ imap.user }}"
+password     = "{{ imap.password }}"
+save_to_sent = {{ imap.save_to_sent | tojson }}
+
+[matrix]
+homeserver        = "{{ matrix.homeserver }}"
+server_address    = "{{ matrix.server_address }}"
+room              = "{{ matrix.room }}"
+user              = "{{ matrix.user }}"
+password          = "{{ matrix.password }}"
+crypto_store_path = "{{ matrix.crypto_store_path }}"
+auto_create_room_for_meater_uuid = {{ matrix.auto_create_room_for_meater_uuid | tojson }}
+pitmaster         = "{{ matrix.pitmaster }}"
+
+[auth]
+method                 = "{{ auth.method }}"
+keycloak_url           = "{{ auth.keycloak_url }}"
+keycloak_realm         = "{{ auth.keycloak_realm }}"
+keycloak_client_id     = "{{ auth.keycloak_client_id }}"
+keycloak_client_secret = "{{ auth.keycloak_client_secret }}"
+jwt_login_type         = "{{ auth.jwt_login_type }}"

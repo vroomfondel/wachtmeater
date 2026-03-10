@@ -1,0 +1,67 @@
+name: BuildAndPushMultiarch
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["mypy and pytests"]
+    branches: ["main"]
+    types:
+      - completed
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      # Get the repository's code
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # https://github.com/docker/setup-qemu-action
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # https://github.com/docker/setup-buildx-action
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: get some runtime info
+        run: |
+          echo PWD: $(pwd)
+          echo ENV: $(env)
+          echo GH-REF: ${{ github.ref }}
+          echo GH-SHA: ${{ github.sha }}
+          tree
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set build variables
+        id: build_vars
+        run: |
+          BUILDTIME=$(TZ='Europe/Berlin' date +'%Y-%m-%d %H:%M:%S %Z')
+          PYTHON_VERSION=3.14
+          DEBIAN_VERSION=slim-trixie
+
+          TAGS="xomoxcc/minimatrix:latest,xomoxcc/minimatrix:python-${PYTHON_VERSION}-${DEBIAN_VERSION}"
+
+          echo "buildtime=${BUILDTIME}" >> $GITHUB_OUTPUT
+          echo "python_version=${PYTHON_VERSION}" >> $GITHUB_OUTPUT
+          echo "debian_version=${DEBIAN_VERSION}" >> $GITHUB_OUTPUT
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.build_vars.outputs.tags }}
+          build-args: |
+            buildtime=${{ steps.build_vars.outputs.buildtime }}
+            python_version=${{ steps.build_vars.outputs.python_version }}
+            debian_version=${{ steps.build_vars.outputs.debian_version }}

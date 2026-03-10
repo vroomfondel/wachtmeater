@@ -1,0 +1,9 @@
+minimatrix
+loguru>=0.7.3
+PyYAML>=6.0
+requests>=2.31.0
+playwright>=1.40.0
+kubernetes>=28.0.0
+matrix-nio[e2e]>=0.25.0
+Jinja2>=3.1.0
+websockets
