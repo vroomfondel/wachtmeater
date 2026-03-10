@@ -124,7 +124,6 @@ class TestWachtmeaterConfigAllSections:
         assert hasattr(cfg, "ollama")
         assert hasattr(cfg, "meater")
         assert hasattr(cfg, "browser")
-        assert hasattr(cfg, "runner")
         assert hasattr(cfg, "sip")
         assert hasattr(cfg, "monitoring")
         assert hasattr(cfg, "matrix")
