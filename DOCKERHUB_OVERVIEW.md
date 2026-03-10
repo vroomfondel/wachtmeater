@@ -1,6 +1,9 @@
 [![black-lint](https://github.com/vroomfondel/wachtmeater/actions/workflows/checkblack.yml/badge.svg)](https://github.com/vroomfondel/wachtmeater/actions/workflows/checkblack.yml)
 [![mypy and pytests](https://github.com/vroomfondel/wachtmeater/actions/workflows/mypynpytests.yml/badge.svg)](https://github.com/vroomfondel/wachtmeater/actions/workflows/mypynpytests.yml)
 [![BuildAndPushMultiarch](https://github.com/vroomfondel/wachtmeater/actions/workflows/buildmultiarchandpush.yml/badge.svg)](https://github.com/vroomfondel/wachtmeater/actions/workflows/buildmultiarchandpush.yml)
+[![Cumulative Clones](https://img.shields.io/endpoint?logo=github&url=https://gist.githubusercontent.com/vroomfondel/b0b152c310e1ea619801a2c00886d8fb/raw/wachtmeater_clone_count.json)](https://github.com/vroomfondel/wachtmeater)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/wachtmeater?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=PyPi+Downloads)](https://pepy.tech/projects/wachtmeater)
+[![PyPI](https://img.shields.io/pypi/v/wachtmeater?logo=pypi&logoColor=white)](https://pypi.org/project/wachtmeater/)
 
 [![Gemini_Generated_Image_vka2wyvka2wyvka2_250x250.png](https://raw.githubusercontent.com/vroomfondel/wachtmeater/main/Gemini_Generated_Image_vka2wyvka2wyvka2_250x250.png)](https://github.com/vroomfondel/wachtmeater)
 
