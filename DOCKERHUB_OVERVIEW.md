@@ -19,6 +19,30 @@ temperature reached, stall detected, etc.).
 - **PyPI**: [wachtmeater](https://pypi.org/project/wachtmeater/)
 - **License**: LGPLv3
 
+## Why this exists
+
+Long cooks (10-16 h) mean you sleep while the meat is on — and miss it when the fire goes out, a stall drags on, or the target temp is reached at 3 a.m. wachtmeater watches the MEATER Cloud page continuously, posts periodic status updates to Matrix so you can check in at a glance, and triggers a SIP phone call when something actually needs your attention. **Tip:** save the calling number as a VIP/priority contact on your phone so the call bypasses Do Not Disturb and wakes you up.
+
+## Screenshots
+
+*Beef Brisket, ~14 h cook, monitored start to finish.*
+
+![Matrix chat mid-cook status: 86 °C, 9 h 22 min elapsed](https://raw.githubusercontent.com/vroomfondel/wachtmeater/main/Bildschirmfoto_2026-03-10_12-41-49.png)
+
+*Mid-cook Matrix status — 86 °C, 9 h 22 min elapsed.*
+
+![MEATER Cloud dashboard: 5 min before cook ends, 94 °C / 95 °C target](https://raw.githubusercontent.com/vroomfondel/wachtmeater/main/Bildschirmfoto_2026-03-10_12-42-31.png)
+
+*MEATER Cloud: "5 min before cook ends" — 94 °C / 95 °C target.*
+
+![Matrix chat near-end status: 94 °C, 13 h 36 min elapsed](https://raw.githubusercontent.com/vroomfondel/wachtmeater/main/Bildschirmfoto_2026-03-10_12-42-41.png)
+
+*Near-end Matrix status — 94 °C, 13 h 36 min elapsed.*
+
+![MEATER Cloud finished summary: target 95 °C, peak 94 °C, approximately 14 hours](https://raw.githubusercontent.com/vroomfondel/wachtmeater/main/Bildschirmfoto_2026-03-10_12-45-47.png)
+
+*MEATER Cloud finished summary — target 95 °C, peak 94 °C, ~14 h total.*
+
 ## What it does
 
 - Periodically scrapes a MEATER Cloud cook URL via a remote Chrome browser (CDP)

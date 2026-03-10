@@ -16,6 +16,36 @@ to E2E-encrypted Matrix rooms, and calls you when something needs attention (fir
 target reached, stall, cook ended, etc.). Supports automatic per-cook Matrix room creation
 and TOML-based configuration.
 
+## Why this exists
+
+Long cooks — brisket, pulled pork, pork belly — routinely run 10 to 16 hours. You go to sleep, and while you sleep the fire can go out, the meat can stall for hours, or the target temperature gets reached with nobody there to pull it off. By the time you notice, the cook is ruined or at least far from ideal.
+
+wachtmeater watches the MEATER Cloud page continuously and reaches out only when something actually needs your attention. Periodic Matrix messages give you the full picture at a glance — current internal and ambient temps, elapsed time, remaining estimate — so you can check in whenever you want without opening an app.
+
+When things go sideways (or the cook finishes), a SIP phone call is triggered automatically. A phone call is the reliable escape hatch here: push notifications are easy to sleep through, but a ringing phone is not.
+
+**Tip:** Save the calling number as a contact on your phone and mark it as a VIP / priority / starred contact. That way the call bypasses Do Not Disturb mode and actually wakes you up at 3 a.m. when your brisket hits target.
+
+## Screenshots
+
+*Real-world Beef Brisket cook, ~14 hours, monitored from start to finish.*
+
+![Matrix chat mid-cook status: 86 °C internal, 9 h 22 min elapsed](https://raw.githubusercontent.com/vroomfondel/wachtmeater/main/Bildschirmfoto_2026-03-10_12-41-49.png)
+
+*Matrix status update mid-cook — 86 °C internal, 9 h 22 min elapsed.*
+
+![MEATER Cloud dashboard showing 5 minutes before cook ends, 94 °C with 95 °C target](https://raw.githubusercontent.com/vroomfondel/wachtmeater/main/Bildschirmfoto_2026-03-10_12-42-31.png)
+
+*MEATER Cloud dashboard showing "5 minutes before cook ends" — 94 °C with 95 °C target.*
+
+![Matrix chat near-end status: 94 °C internal, 13 h 36 min elapsed](https://raw.githubusercontent.com/vroomfondel/wachtmeater/main/Bildschirmfoto_2026-03-10_12-42-41.png)
+
+*Matrix status update near the end — 94 °C internal, 13 h 36 min elapsed.*
+
+![MEATER Cloud finished cook summary: target 95 °C, peak 94 °C, approximately 14 hours](https://raw.githubusercontent.com/vroomfondel/wachtmeater/main/Bildschirmfoto_2026-03-10_12-45-47.png)
+
+*MEATER Cloud finished cook summary — target 95 °C, peak 94 °C, total time ~14 hours.*
+
 ## Components
 
 | Module | Description |
