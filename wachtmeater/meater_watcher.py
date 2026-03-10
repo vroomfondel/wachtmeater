@@ -73,7 +73,6 @@ class WatcherError(Exception):
 # Configuration from typed config
 # ---------------------------------------------------------------------------
 MEATER_URL: str = cfg.meater.url
-assert MEATER_URL, "MEATER_URL must be configured"
 
 MEATER_UUID: str = MEATER_URL.split("/")[-1]
 
@@ -720,6 +719,9 @@ async def event_loop(
         messaging: Optional messaging backend.  When ``None`` (the default),
             a ``MatrixMessagingAdapter`` is created automatically.
     """
+
+    if not MEATER_URL:
+        raise WatcherError("MEATER_URL must be configured")
 
     state = load_state()
 
