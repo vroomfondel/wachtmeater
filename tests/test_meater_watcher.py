@@ -719,6 +719,7 @@ class TestEventLoopErrorTracking:
         mock_messaging = _make_mock_messaging(sync_side_effect=_failing_sync)
 
         with (
+            patch.object(mw, "MEATER_URL", "https://meater.io/test-uuid"),
             patch.object(mw, "load_state", return_value=WatcherState()),
             patch.object(mw, "save_state"),
             patch.object(mw, "call_pitmaster"),
@@ -745,6 +746,7 @@ class TestStartupGreeting:
         mock_messaging = _make_mock_messaging(sync_side_effect=_stop_sync)
 
         with (
+            patch.object(mw, "MEATER_URL", "https://meater.io/test-uuid"),
             patch.object(mw, "load_state", return_value=WatcherState()),
             patch.object(mw, "save_state"),
             patch.object(mw, "call_pitmaster"),
