@@ -10,3 +10,4 @@ pytest==9.0.*
 types-PyYAML
 pygithub
 types-requests
+types-tabulate
