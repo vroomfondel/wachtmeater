@@ -295,6 +295,20 @@ def extract_via_browser(url: str) -> CookData:
             else:
                 status = "unknown"
 
+            # Persist raw DOM artefacts on suspected outages so the heuristic
+            # can be refined against real outage pages later.
+            if status == "offline":
+                try:
+                    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+                    html_path = screenshot_dir / f"meater-offline-{meater_uuid}-{ts}.html"
+                    text_path = screenshot_dir / f"meater-offline-{meater_uuid}-{ts}.txt"
+                    html_path.write_text(page.content(), encoding="utf-8")
+                    body_text = page.evaluate("() => document.body.innerText || ''")
+                    text_path.write_text(body_text, encoding="utf-8")
+                    logger.info(f"Offline artefacts saved: {html_path.name}, {text_path.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to save offline artefacts: {e}")
+
             peak_temp_c = data.get("summary_peak")
 
             logger.info(

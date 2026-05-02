@@ -112,6 +112,26 @@ class TestHandleCommand:
         assert mw.handle_command("status", base_state) == "__status__"
 
     @patch.object(mw, "save_state")
+    def test_testcall_default(self, _save: MagicMock, base_state: WatcherState) -> None:
+        result = mw.handle_command("testcall", base_state)
+        assert result == "__testcall__\nWachtmeater Testanruf"
+
+    @patch.object(mw, "save_state")
+    def test_testcall_with_text_preserves_case(self, _save: MagicMock, base_state: WatcherState) -> None:
+        result = mw.handle_command("testcall Hallo Klaus, das Brisket ist Fertig!", base_state)
+        assert result == "__testcall__\nHallo Klaus, das Brisket ist Fertig!"
+
+    @patch.object(mw, "save_state")
+    def test_testcall_uppercase_keyword_still_matches(self, _save: MagicMock, base_state: WatcherState) -> None:
+        result = mw.handle_command("TestCall Probealarm", base_state)
+        assert result == "__testcall__\nProbealarm"
+
+    @patch.object(mw, "save_state")
+    def test_testcall_strips_surrounding_whitespace(self, _save: MagicMock, base_state: WatcherState) -> None:
+        result = mw.handle_command("  testcall   foo bar  ", base_state)
+        assert result == "__testcall__\nfoo bar"
+
+    @patch.object(mw, "save_state")
     def test_stop(self, _save: MagicMock, base_state: WatcherState) -> None:
         assert mw.handle_command("stop", base_state) == "__stop__"
 

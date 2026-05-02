@@ -4,7 +4,7 @@ Provides shared logging configuration, environment loading, and a startup
 banner used by all wachtmeater sub-commands.
 """
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 import json
 import logging

@@ -628,6 +628,7 @@ enable offline            - Station-Offline-Alert AN
 disable offline           - Station-Offline-Alert AUS
 reset stall               - Stall-Alert zuruecksetzen
 reset wrap                - Wrap-Alert zuruecksetzen
+testcall [<text>]         - Testanruf bei Pitmaster mit beliebigem Text
 hilfe / help              - Diese Hilfe anzeigen
 stop / quit / beenden     - Watcher beenden\
 """
@@ -648,10 +649,17 @@ def handle_command(body: str, state: WatcherState) -> str | None:
 
     Returns:
         A response string for the user, a sentinel (``"__status__"``,
-        ``"__stop__"``), or ``None`` if the message is not a recognised
-        command.
+        ``"__stop__"``, ``"__testcall__\\n<text>"``), or ``None`` if the
+        message is not a recognised command.
     """
-    text = body.strip().lower()
+    raw = body.strip()
+    text = raw.lower()
+
+    # --- testcall (parsed before lowering so the spoken text keeps its case) ---
+    m = re.match(r"testcall(?:\s+(.+))?$", raw, re.IGNORECASE)
+    if m:
+        spoken = m.group(1).strip() if m.group(1) else "Wachtmeater Testanruf"
+        return f"__testcall__\n{spoken}"
 
     # --- help ---
     if text in ("hilfe", "help", "?"):
@@ -937,6 +945,15 @@ async def event_loop(
                     "Cook-Ende erkannt. Watcher wird beendet.",
                 )
                 stop_event.set()
+            return
+
+        if response.startswith("__testcall__\n"):
+            spoken = response.removeprefix("__testcall__\n")
+            asyncio.create_task(asyncio.to_thread(call_pitmaster, spoken))
+            await messaging.send_message(
+                incoming_room_id,
+                f"Testanruf wird ausgeloest an {cfg.sip.dest}: {spoken!r}",
+            )
             return
 
         # Regular response — post back to the room
