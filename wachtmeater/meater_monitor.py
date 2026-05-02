@@ -46,6 +46,7 @@ class _RawCookData(TypedDict):
     cook_finished: bool
     summary_text: str | None
     summary_peak: int | None
+    searching_for_cook: bool
 
 
 class CookData(NamedTuple):
@@ -62,7 +63,7 @@ class CookData(NamedTuple):
         elapsed_time: Human-readable elapsed time.
         elapsed_minutes: Elapsed time in minutes.
         status: Cook status — ``"cooking"``, ``"done"``, ``"finished"``,
-            or ``"unknown"``.
+            ``"offline"`` (station lost cloud connectivity), or ``"unknown"``.
         battery: MEATER probe battery percentage.
         peak_temp_c: Peak internal temperature reported by the MEATER summary.
         screenshot: Filesystem path to a screenshot of the cook page.
@@ -208,6 +209,7 @@ def extract_via_browser(url: str) -> CookData:
                         const match = h3.textContent.match(/Peak\\s*:\\s*(\\d+)/);
                         return match ? parseInt(match[1]) : null;
                     })(),
+                    searching_for_cook: /searching for cook/i.test(document.body.innerText || ''),
                 };
             }""")
 
@@ -274,11 +276,22 @@ def extract_via_browser(url: str) -> CookData:
             internal = data.get("internal_temp_c")
             target = data.get("target_temp_c")
             cook_finished = data.get("cook_finished", False)
+            searching_for_cook = data.get("searching_for_cook", False)
+            no_cook_data = (
+                internal is None
+                and target is None
+                and data.get("ambient_temp_c") is None
+                and data.get("cook_name") is None
+            )
 
             if cook_finished:
                 status = "finished"
             elif internal is not None and target is not None:
                 status = "done" if internal >= target else "cooking"
+            elif searching_for_cook or no_cook_data:
+                # Station lost connectivity to MEATER Cloud — share page is
+                # stuck on a "Searching for cook…" spinner with empty DOM.
+                status = "offline"
             else:
                 status = "unknown"
 

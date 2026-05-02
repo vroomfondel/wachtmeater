@@ -55,7 +55,8 @@ Environment variable reference
     ``CHECK_INTERVAL`` (``600``),
     ``STALL_WINDOW`` (``3``),
     ``COOKEND_ERROR_THRESHOLD`` (``3``),
-    ``COOKEND_PROBE_REMOVED_TEMP`` (``35.0``).
+    ``COOKEND_PROBE_REMOVED_TEMP`` (``35.0``),
+    ``STATION_OFFLINE_CALL_THRESHOLD`` (``2``).
 
 **[matrix]** — Matrix messaging:
     ``MATRIX_ROOM``, ``MATRIX_SERVER_ADDRESS``, ``MATRIX_USER``,
@@ -83,7 +84,8 @@ Environment variable reference
     ``ALERT_DEFAULT_AMBIENT_RANGE_ENABLED`` (``false``),
     ``ALERT_DEFAULT_AMBIENT_RANGE_MIN`` (``0.0``),
     ``ALERT_DEFAULT_AMBIENT_RANGE_MAX`` (``0.0``),
-    ``ALERT_DEFAULT_COOKEND_ENABLED`` (``true``).
+    ``ALERT_DEFAULT_COOKEND_ENABLED`` (``true``),
+    ``ALERT_DEFAULT_STATION_OFFLINE_ENABLED`` (``true``).
 """
 
 import json
@@ -321,6 +323,9 @@ class MonitoringConfig(_EnvMixin):
         cookend_probe_removed_temp: Internal temp below this (after having
             been above 50 C) triggers probe-removed detection
             (``COOKEND_PROBE_REMOVED_TEMP``).
+        station_offline_call_threshold: Consecutive offline cycles before
+            a SIP call is fired for a prolonged station outage
+            (``STATION_OFFLINE_CALL_THRESHOLD``).
     """
 
     ambient_temp_drop_threshold: int = env("AMBIENT_TEMP_DROP_THRESHOLD", default=10)
@@ -328,6 +333,7 @@ class MonitoringConfig(_EnvMixin):
     stall_window: int = env("STALL_WINDOW", default=3)
     cookend_error_threshold: int = env("COOKEND_ERROR_THRESHOLD", default=3)
     cookend_probe_removed_temp: float = env("COOKEND_PROBE_REMOVED_TEMP", default=35.0)
+    station_offline_call_threshold: int = env("STATION_OFFLINE_CALL_THRESHOLD", default=2)
 
 
 @envdataclass
@@ -426,6 +432,9 @@ class AlertDefaultsConfig(_EnvMixin):
             (``ALERT_DEFAULT_AMBIENT_RANGE_MAX``).
         tempalert_cookend_enabled: Enable cook-end detection
             (``ALERT_DEFAULT_COOKEND_ENABLED``).
+        tempalert_station_offline_enabled: Enable station-offline detection
+            and SIP escalation on prolonged outages
+            (``ALERT_DEFAULT_STATION_OFFLINE_ENABLED``).
     """
 
     tempalert_tempdown_enabled: bool = env("ALERT_DEFAULT_TEMPDOWN_ENABLED", default=True)
@@ -439,6 +448,7 @@ class AlertDefaultsConfig(_EnvMixin):
     ambient_range_min: float = env("ALERT_DEFAULT_AMBIENT_RANGE_MIN", default=0.0)
     ambient_range_max: float = env("ALERT_DEFAULT_AMBIENT_RANGE_MAX", default=0.0)
     tempalert_cookend_enabled: bool = env("ALERT_DEFAULT_COOKEND_ENABLED", default=True)
+    tempalert_station_offline_enabled: bool = env("ALERT_DEFAULT_STATION_OFFLINE_ENABLED", default=True)
 
 
 @dataclass
@@ -470,6 +480,10 @@ class WatcherState:
     tempalert_cookend_enabled: bool = True
     cook_ended: bool = False
     matrix_room_id: str | None = None
+    # Station offline detection
+    tempalert_station_offline_enabled: bool = True
+    offline_streak: int = 0
+    station_offline_call_sent: bool = False
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "WatcherState":

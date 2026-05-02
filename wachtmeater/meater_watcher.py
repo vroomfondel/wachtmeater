@@ -23,6 +23,9 @@ Supported Matrix commands (case-insensitive):
     - ``disable ambient``           — Disable ambient range alert.
     - ``enable cookend``            — Enable cook-end detection (auto-stop).
     - ``disable cookend``           — Disable cook-end detection.
+    - ``enable offline``            — Enable station-offline alert (SIP on
+      prolonged outage).
+    - ``disable offline``           — Disable station-offline alert.
     - ``hilfe`` / ``help``          — Show available commands.
     - ``stop`` / ``quit`` / ``beenden`` — Shut down the watcher loop.
 
@@ -90,6 +93,8 @@ STALL_WINDOW: int = cfg.monitoring.stall_window
 COOKEND_ERROR_THRESHOLD: int = cfg.monitoring.cookend_error_threshold
 # Internal temp below this after having been above 50 C => probe removed
 COOKEND_PROBE_REMOVED_TEMP: float = cfg.monitoring.cookend_probe_removed_temp
+# Consecutive offline cycles before SIP-escalating a station outage
+STATION_OFFLINE_CALL_THRESHOLD: int = cfg.monitoring.station_offline_call_threshold
 
 # ---------------------------------------------------------------------------
 # State management
@@ -118,6 +123,7 @@ def _apply_alert_defaults(state: WatcherState, alert_cfg: AlertDefaultsConfig) -
     state.ambient_range_min = alert_cfg.ambient_range_min or None
     state.ambient_range_max = alert_cfg.ambient_range_max or None
     state.tempalert_cookend_enabled = alert_cfg.tempalert_cookend_enabled
+    state.tempalert_station_offline_enabled = alert_cfg.tempalert_station_offline_enabled
 
 
 def load_state() -> WatcherState:
@@ -262,6 +268,15 @@ def _alert_summary(state: WatcherState) -> list[str]:
     else:
         lines.append("Cook-Ende: AUS")
 
+    # Station offline
+    if state.tempalert_station_offline_enabled:
+        s = f"Station-Offline-Alert: AN (SIP nach {STATION_OFFLINE_CALL_THRESHOLD} Cycles)"
+        if state.offline_streak > 0:
+            s += f" [aktuell offline: {state.offline_streak} Cycle(s)]"
+        lines.append(s)
+    else:
+        lines.append("Station-Offline-Alert: AUS")
+
     return lines
 
 
@@ -324,6 +339,56 @@ def run_meater_check(
                 return "__cook_ended__"
 
         return msg
+
+    # --- Station offline detection (MEATER Cloud "Searching for cook…") ---
+    if data.get("status") == "offline":
+        state.offline_streak += 1
+        logger.warning(f"MEATER Station offline (streak={state.offline_streak})")
+
+        last_internal = state.last_internal_temp
+        last_ambient = state.last_ambient_temp
+        offline_minutes = state.offline_streak * (CHECK_INTERVAL // 60)
+
+        lines = [f"⚠ MEATER Station offline (Cycle {state.offline_streak}, ~{offline_minutes} Min.)"]
+        if last_internal is not None:
+            lines.append(f"Letzter Internal: {last_internal} C")
+        if last_ambient is not None:
+            lines.append(f"Letzter Ambient: {last_ambient} C")
+        lines.append(f"Time: {timestamp}")
+        offline_msg = "\n".join(lines)
+
+        # Post to Matrix only on the transition into offline state.
+        if state.offline_streak == 1 and send is not None:
+            try:
+                send(offline_msg, None)
+            except Exception:
+                pass
+
+        # SIP-escalate once per outage when threshold is reached.
+        if (
+            state.tempalert_station_offline_enabled
+            and not state.station_offline_call_sent
+            and state.offline_streak >= STATION_OFFLINE_CALL_THRESHOLD
+        ):
+            call_pitmaster(
+                f"MEATER Station seit {offline_minutes} Minuten offline. " f"Bitte Internet bzw. Block pruefen."
+            )
+            state.station_offline_call_sent = True
+
+        save_state(state)
+        return offline_msg
+
+    # Recovery: previous cycle(s) were offline, this one succeeded.
+    if state.offline_streak > 0:
+        recovery_msg = f"✅ MEATER Station wieder online (war {state.offline_streak} Cycle(s) offline)."
+        logger.info(recovery_msg)
+        if send is not None:
+            try:
+                send(recovery_msg, None)
+            except Exception:
+                pass
+        state.offline_streak = 0
+        state.station_offline_call_sent = False
 
     # Reset consecutive error counter on success
     state.consecutive_errors = 0
@@ -559,6 +624,8 @@ enable ambient <min> <max>- Ambient-Bereich AN (min/max C)
 disable ambient           - Ambient-Bereich AUS
 enable cookend            - Cook-Ende-Erkennung AN
 disable cookend           - Cook-Ende-Erkennung AUS
+enable offline            - Station-Offline-Alert AN
+disable offline           - Station-Offline-Alert AUS
 reset stall               - Stall-Alert zuruecksetzen
 reset wrap                - Wrap-Alert zuruecksetzen
 hilfe / help              - Diese Hilfe anzeigen
@@ -694,6 +761,31 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         state.tempalert_cookend_enabled = False
         save_state(state)
         return "Cook-Ende-Erkennung deaktiviert."
+
+    # --- enable/disable station-offline alert ---
+    if text in (
+        "enable offline",
+        "offline an",
+        "offline on",
+        "offline enable",
+        "enable station_offline",
+        "enable station-offline",
+    ):
+        state.tempalert_station_offline_enabled = True
+        save_state(state)
+        return "Station-Offline-Alert aktiviert."
+
+    if text in (
+        "disable offline",
+        "offline aus",
+        "offline off",
+        "offline disable",
+        "disable station_offline",
+        "disable station-offline",
+    ):
+        state.tempalert_station_offline_enabled = False
+        save_state(state)
+        return "Station-Offline-Alert deaktiviert."
 
     # --- stop ---
     if text in ("stop", "quit", "beenden", "exit"):
