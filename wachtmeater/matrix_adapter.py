@@ -19,7 +19,7 @@ from typing import ClassVar
 
 from nio import UploadResponse
 
-from wachtmeater.messaging import MessageCallback
+from wachtmeater.messaging import MessageCallback, RoomSelection
 
 from wachtmeater import cfg, read_dot_env_to_environ
 
@@ -74,58 +74,105 @@ class MatrixMessagingAdapter:
         meater_uuid: str,
         pitmaster_mxid: str,
         persisted_room_id: str | None,
-    ) -> str | None:
-        """Select, join, or create a room.
+    ) -> RoomSelection:
+        """Select, join, and/or create rooms.
 
-        If *configured_room* is set the adapter joins it directly.  When
-        *auto_create* is ``True``, a persisted room is rejoined first; if
-        that fails a new encrypted room is created and the pitmaster is
-        invited.
+        Returns a :class:`RoomSelection` with the (resolved) broadcast and
+        cook room IDs.  The two sources combine independently:
+
+        * If *configured_room* is non-empty it is joined and resolved to a
+          room ID.  Both ``!id:srv`` and ``#alias:srv`` forms are
+          accepted; aliases are resolved via the server's join response.
+        * If *auto_create* is ``True`` a per-cook room is added — either
+          by rejoining *persisted_room_id* or by creating a fresh
+          encrypted room and inviting the pitmaster.
 
         Args:
-            configured_room: Explicit room ID/alias to join.  When non-empty
-                this takes precedence over auto-creation.
-            auto_create: Whether to create a new room when no persisted
-                room can be rejoined.
+            configured_room: Explicit room ID or alias for the broadcast room.
+            auto_create: Whether to create/rejoin a per-cook room.
             meater_uuid: Cook UUID used in the room name and topic.
             pitmaster_mxid: Matrix user ID to invite into newly created rooms.
-            persisted_room_id: Previously saved room ID to attempt rejoining.
+            persisted_room_id: Previously saved cook-room ID to rejoin.
 
         Returns:
-            The room ID on success, or ``None`` if no room could be obtained.
+            A ``RoomSelection`` whose fields are the resolved room IDs
+            (or ``None`` when the corresponding source did not yield a
+            usable room).
         """
         from nio import JoinResponse, RoomCreateResponse
 
+        broadcast_id: str | None = None
         if configured_room:
-            if configured_room not in self._handler.client.rooms:
-                await self._handler.client.join(configured_room)
-            return configured_room
+            broadcast_id = await self._resolve_configured_room(configured_room)
 
+        cook_id: str | None = None
         if auto_create:
-            # Try to rejoin persisted room first
             if persisted_room_id:
                 join_resp = await self._handler.client.join(persisted_room_id)
                 if isinstance(join_resp, JoinResponse):
-                    return persisted_room_id
+                    cook_id = join_resp.room_id
 
-            # Create a new encrypted room
-            short_uuid = meater_uuid.replace("-", "")[:8].lower()
-            resp = await self._handler.client.room_create(
-                name=f"Wachtmeater: {short_uuid}",
-                topic=f"MEATER Cook {meater_uuid}",
-                invite=[pitmaster_mxid] if pitmaster_mxid else [],
-                initial_state=[
-                    {
-                        "type": "m.room.encryption",
-                        "state_key": "",
-                        "content": {"algorithm": "m.megolm.v1.aes-sha2"},
-                    }
-                ],
-            )
-            if isinstance(resp, RoomCreateResponse):
-                room_id: str = resp.room_id
-                return room_id
+            if cook_id is None:
+                short_uuid = meater_uuid.replace("-", "")[:8].lower()
+                resp = await self._handler.client.room_create(
+                    name=f"Wachtmeater: {short_uuid}",
+                    topic=f"MEATER Cook {meater_uuid}",
+                    invite=[pitmaster_mxid] if pitmaster_mxid else [],
+                    initial_state=[
+                        {
+                            "type": "m.room.encryption",
+                            "state_key": "",
+                            "content": {"algorithm": "m.megolm.v1.aes-sha2"},
+                        }
+                    ],
+                )
+                if isinstance(resp, RoomCreateResponse):
+                    cook_id = resp.room_id
 
+        # Avoid duplicate when a user accidentally configures the same room
+        # as both broadcast and persisted cook room.
+        if cook_id is not None and cook_id == broadcast_id:
+            cook_id = None
+
+        return RoomSelection(broadcast=broadcast_id, cook=cook_id)
+
+    async def _resolve_configured_room(self, spec: str) -> str | None:
+        """Resolve a configured room spec (ID or alias) to a room ID.
+
+        Args:
+            spec: ``!id:srv`` (room ID) or ``#alias:srv`` (room alias).
+                Other shapes are logged and joined as-is — likely failing.
+
+        Returns:
+            The resolved room ID, or ``None`` if the join failed.
+        """
+        from nio import JoinResponse
+
+        if spec.startswith("!"):
+            # Already a room ID — only join if not yet a member.
+            if spec in self._handler.client.rooms:
+                return spec
+            join_resp = await self._handler.client.join(spec)
+            if isinstance(join_resp, JoinResponse):
+                return str(join_resp.room_id)
+            MatrixMessagingAdapter.logger.warning(f"Failed to join configured room {spec}: {join_resp}")
+            return None
+
+        if spec.startswith("#"):
+            # Alias — always resolve via join response (idempotent if already a member).
+            join_resp = await self._handler.client.join(spec)
+            if isinstance(join_resp, JoinResponse):
+                return str(join_resp.room_id)
+            MatrixMessagingAdapter.logger.warning(f"Failed to join configured room alias {spec}: {join_resp}")
+            return None
+
+        MatrixMessagingAdapter.logger.warning(
+            f"Configured room {spec!r} is neither a room ID (!id:srv) nor an alias (#alias:srv); "
+            f"attempting join as-is."
+        )
+        join_resp = await self._handler.client.join(spec)
+        if isinstance(join_resp, JoinResponse):
+            return str(join_resp.room_id)
         return None
 
     def get_rooms(self) -> list[str]:

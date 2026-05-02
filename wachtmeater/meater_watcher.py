@@ -749,25 +749,31 @@ async def event_loop(
     await messaging.connect()
 
     # --- Room selection / auto-creation ---
-    room_id = await messaging.get_or_create_room(
+    selection = await messaging.get_or_create_room(
         configured_room=cfg.matrix.room,
         auto_create=cfg.matrix.auto_create_room_for_meater_uuid,
         meater_uuid=MEATER_UUID,
         pitmaster_mxid=cfg.matrix.pitmaster,
         persisted_room_id=state.matrix_room_id,
     )
-    if room_id and room_id != state.matrix_room_id:
-        state.matrix_room_id = room_id
+    if selection.cook and selection.cook != state.matrix_room_id:
+        state.matrix_room_id = selection.cook
         save_state(state)
+
+    room_ids = selection.all_rooms
 
     # Determine bot's MXID from the backend
     bot_mxid = messaging.get_bot_user_id()
     logger.info(f"Matrix: eingeloggt als {bot_mxid}")
     logger.info(f"Matrix: {len(messaging.get_rooms())} Raum/Raeume beigetreten")
+    logger.info(
+        f"Matrix: broadcasting an {len(room_ids)} Raum/Raeume "
+        f"(broadcast={selection.broadcast}, cook={selection.cook})"
+    )
 
     # Send startup greeting with available commands
     startup_msg = f"Hallo! MEATER Watcher ist gestartet.\n\n{HELP_TEXT}"
-    target_rooms = [room_id] if room_id else messaging.get_rooms()
+    target_rooms = room_ids if room_ids else messaging.get_rooms()
     for rid in target_rooms:
         try:
             await messaging.send_message(rid, startup_msg)
@@ -789,8 +795,8 @@ async def event_loop(
             text: Message body to send.
             image_path: Optional filesystem path to an image to attach.
         """
-        target_rooms = [room_id] if room_id else messaging.get_rooms()
-        for rid in target_rooms:
+        targets = room_ids if room_ids else messaging.get_rooms()
+        for rid in targets:
             fut = asyncio.run_coroutine_threadsafe(messaging.send_message(rid, text), loop)
             fut.result(timeout=30)
             if image_path:

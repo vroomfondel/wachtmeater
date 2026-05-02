@@ -691,7 +691,9 @@ def _make_mock_messaging(sync_side_effect: Any = None) -> MagicMock:
     """Create a mock that satisfies the MessagingBackend protocol."""
     m = MagicMock()
     m.connect = AsyncMock()
-    m.get_or_create_room = AsyncMock(return_value="!room:test")
+    from wachtmeater.messaging import RoomSelection
+
+    m.get_or_create_room = AsyncMock(return_value=RoomSelection(broadcast=None, cook="!room:test"))
     m.get_rooms = MagicMock(return_value=["!room:test"])
     m.get_bot_user_id = MagicMock(return_value="@bot:test")
     m.send_message = AsyncMock()

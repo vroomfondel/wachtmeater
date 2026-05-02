@@ -6,10 +6,32 @@ matrix-specific modules.
 """
 
 from collections.abc import Callable, Coroutine
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 MessageCallback = Callable[[str, str, str, str], Coroutine[None, None, None]]
 """Signature: (room_id, sender, body, room_display_name) -> async None"""
+
+
+class RoomSelection(NamedTuple):
+    """Result of room selection / auto-creation.
+
+    Attributes:
+        broadcast: Resolved Matrix room ID of the configured operator
+            room (always an ``!id:srv`` form, even when the user supplied
+            a ``#alias:srv``).  ``None`` when no broadcast room is
+            configured or the join failed.
+        cook: Resolved Matrix room ID of the per-cook room (rejoined or
+            freshly created).  ``None`` when ``auto_create`` is disabled
+            or the create failed.
+    """
+
+    broadcast: str | None
+    cook: str | None
+
+    @property
+    def all_rooms(self) -> list[str]:
+        """Return both rooms as a flat list, skipping ``None`` entries."""
+        return [r for r in (self.broadcast, self.cook) if r]
 
 
 class MessagingBackend(Protocol):
@@ -31,8 +53,14 @@ class MessagingBackend(Protocol):
         meater_uuid: str,
         pitmaster_mxid: str,
         persisted_room_id: str | None,
-    ) -> str | None:
-        """Select, join, or create a room and return its ID (or ``None``)."""
+    ) -> RoomSelection:
+        """Select, join, and/or create the broadcast and cook rooms.
+
+        *configured_room* may be either a room ID (``!id:srv``) or a room
+        alias (``#alias:srv``); aliases are resolved to IDs via the join
+        response.  *auto_create* controls whether a per-cook room is
+        rejoined or freshly created in addition.
+        """
         ...
 
     def get_rooms(self) -> list[str]:
