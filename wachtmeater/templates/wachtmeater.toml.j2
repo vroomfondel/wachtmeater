@@ -32,23 +32,6 @@ stall_window                = {{ monitoring.stall_window }}
 cookend_error_threshold     = {{ monitoring.cookend_error_threshold }}
 cookend_probe_removed_temp  = {{ monitoring.cookend_probe_removed_temp }}
 
-[smtp]
-server     = "{{ smtp.server }}"
-port       = {{ smtp.port }}
-user       = "{{ smtp.user }}"
-password   = "{{ smtp.password }}"
-security   = "{{ smtp.security }}"
-from_email = "{{ smtp.from_email }}"
-default_to = "{{ smtp.default_to }}"
-
-[imap]
-server       = "{{ imap.server }}"
-port         = {{ imap.port }}
-security     = "{{ imap.security }}"
-user         = "{{ imap.user }}"
-password     = "{{ imap.password }}"
-save_to_sent = {{ imap.save_to_sent | tojson }}
-
 [matrix]
 homeserver        = "{{ matrix.homeserver }}"
 server_address    = "{{ matrix.server_address }}"

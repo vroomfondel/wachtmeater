@@ -175,12 +175,12 @@ def test_cfg_from_flat_env(tmp_path, monkeypatch) -> None:  # type: ignore[no-un
 
 
 def test_toml_section_aware_mapping(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """TOML clean keys (e.g. 'server' under [smtp]) map to correct env vars."""
+    """TOML clean keys (e.g. 'cdp_url' under [browser]) map to correct env vars."""
     toml_file = tmp_path / "wachtmeater.toml"
-    toml_file.write_text('[smtp]\nserver = "mail.test.com"\nport = 465\n')
+    toml_file.write_text('[browser]\ncdp_url = "http://test:9222"\nscreenshot_dir = "/tmp/x"\n')
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("SMTP_SERVER", raising=False)
-    monkeypatch.delenv("SMTP_SERVER_PORT", raising=False)
+    monkeypatch.delenv("BROWSER_CDP_URL", raising=False)
+    monkeypatch.delenv("SCREENSHOT_DIR", raising=False)
     wachtmeater.read_dot_env_to_environ()
-    assert os.environ["SMTP_SERVER"] == "mail.test.com"
-    assert os.environ["SMTP_SERVER_PORT"] == "465"
+    assert os.environ["BROWSER_CDP_URL"] == "http://test:9222"
+    assert os.environ["SCREENSHOT_DIR"] == "/tmp/x"

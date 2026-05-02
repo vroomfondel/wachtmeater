@@ -1,23 +1,3 @@
-[smtp]
-server   = "smtp.example.com"
-port     = 587
-user     = "user@example.com"
-password = "changeme"
-security = "starttls"
-from_email  = "Example User <user@example.com>"
-default_to  = "recipient@example.com"
-
-[imap]
-server       = "imap.example.com"
-port         = 143
-security     = "starttls"
-user         = "user@example.com"
-password     = "changeme"
-save_to_sent = true
-
-[ollama]
-api_key = "your-ollama-api-key-here"
-
 [meater]
 url            = "https://cooks.cloud.meater.com/cook/00000000-0000-0000-0000-000000000000"
 state_file_dir = "/data"

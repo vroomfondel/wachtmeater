@@ -58,7 +58,7 @@ def build_config_content(meater_url: str) -> str:
     """Build the ``wachtmeater.toml`` config for the K8s meater-watcher container.
 
     Generates a TOML configuration with sections for CDP browser access, MEATER
-    cook monitoring, SIP call alerting, and SMTP/IMAP email configuration.
+    cook monitoring, and SIP call alerting.
 
     Args:
         meater_url: The MEATER Cloud cook URL to monitor.
@@ -76,8 +76,6 @@ def build_config_content(meater_url: str) -> str:
         browser=cfg.browser,
         sip=cfg.sip,
         monitoring=cfg.monitoring,
-        smtp=cfg.smtp,
-        imap=cfg.imap,
         matrix=cfg.matrix,
         auth=cfg.auth,
     )

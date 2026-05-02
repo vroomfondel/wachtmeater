@@ -30,22 +30,6 @@ a Kubernetes Pod spec) always win.
 
 Environment variable reference
 ------------------------------
-**[smtp]** — SMTP mail-sending settings:
-    ``SMTP_SERVER`` (default ``smtp.example.com``),
-    ``SMTP_SERVER_PORT`` (``587``),
-    ``SMTP_SERVER_USER``, ``SMTP_SERVER_PASSWORD``,
-    ``SMTP_SERVER_SECURITY`` (``starttls``),
-    ``FROM_EMAIL``, ``DEFAULT_TO``.
-
-**[imap]** — IMAP mailbox-access settings:
-    ``IMAP_SERVER``, ``IMAP_SERVER_PORT`` (``143``),
-    ``IMAP_SERVER_SECURITY`` (``starttls``),
-    ``IMAP_SERVER_USER``, ``IMAP_SERVER_PASSWORD``,
-    ``SAVE_TO_SENT`` (``true``).
-
-**[ollama]** — Ollama LLM API:
-    ``OLLAMA_API_KEY``.
-
 **[meater]** — MEATER Cloud probe/state-file:
     ``MEATER_URL`` (cook share URL),
     ``STATE_FILE_DIR`` (``/data``),
@@ -247,61 +231,6 @@ class _EnvMixin:
 # ---------------------------------------------------------------------------
 # Section dataclasses
 # ---------------------------------------------------------------------------
-
-
-@envdataclass
-class SmtpConfig(_EnvMixin):
-    """SMTP mail-sending settings.
-
-    Attributes:
-        server: SMTP server hostname (``SMTP_SERVER``).
-        port: SMTP server port (``SMTP_SERVER_PORT``).
-        user: SMTP login user (``SMTP_SERVER_USER``).
-        password: SMTP login password (``SMTP_SERVER_PASSWORD``).
-        security: Connection security mode (``SMTP_SERVER_SECURITY``).
-        from_email: Sender address with display name (``FROM_EMAIL``).
-        default_to: Default recipient address (``DEFAULT_TO``).
-    """
-
-    server: str = env("SMTP_SERVER", default="smtp.example.com")
-    port: int = env("SMTP_SERVER_PORT", default=587)
-    user: str = env("SMTP_SERVER_USER", default="user@example.com")
-    password: str = env("SMTP_SERVER_PASSWORD", default="changeme")
-    security: str = env("SMTP_SERVER_SECURITY", default="starttls")
-    from_email: str = env("FROM_EMAIL", default="Example User <user@example.com>")
-    default_to: str = env("DEFAULT_TO", default="recipient@example.com")
-
-
-@envdataclass
-class ImapConfig(_EnvMixin):
-    """IMAP mailbox-access settings.
-
-    Attributes:
-        server: IMAP server hostname (``IMAP_SERVER``).
-        port: IMAP server port (``IMAP_SERVER_PORT``).
-        security: Connection security mode (``IMAP_SERVER_SECURITY``).
-        user: IMAP login user (``IMAP_SERVER_USER``).
-        password: IMAP login password (``IMAP_SERVER_PASSWORD``).
-        save_to_sent: Whether to save sent mails to Sent folder (``SAVE_TO_SENT``).
-    """
-
-    server: str = env("IMAP_SERVER", default="imap.example.com")
-    port: int = env("IMAP_SERVER_PORT", default=143)
-    security: str = env("IMAP_SERVER_SECURITY", default="starttls")
-    user: str = env("IMAP_SERVER_USER", default="user@example.com")
-    password: str = env("IMAP_SERVER_PASSWORD", default="changeme")
-    save_to_sent: bool = env("SAVE_TO_SENT", default=True)
-
-
-@envdataclass
-class OllamaConfig(_EnvMixin):
-    """Ollama LLM API settings.
-
-    Attributes:
-        api_key: Ollama API key (``OLLAMA_API_KEY``).
-    """
-
-    api_key: str = env("OLLAMA_API_KEY", default="your-ollama-api-key-here")
 
 
 @envdataclass
@@ -577,9 +506,6 @@ class WachtmeaterConfig:
     """Root configuration aggregating all service-specific sections.
 
     Attributes:
-        smtp: SMTP mail-sending settings.
-        imap: IMAP mailbox-access settings.
-        ollama: Ollama LLM API settings.
         meater: MEATER Cloud probe/state-file settings.
         browser: Headless browser (CDP) settings.
         sip: SIP telephony and call-behaviour settings.
@@ -590,9 +516,6 @@ class WachtmeaterConfig:
         alerts: Default alert mode settings for first run.
     """
 
-    smtp: SmtpConfig = field(default_factory=SmtpConfig)
-    imap: ImapConfig = field(default_factory=ImapConfig)
-    ollama: OllamaConfig = field(default_factory=OllamaConfig)
     meater: MeaterConfig = field(default_factory=MeaterConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     sip: SipConfig = field(default_factory=SipConfig)
@@ -610,9 +533,6 @@ class WachtmeaterConfig:
             A fully populated ``WachtmeaterConfig`` instance.
         """
         return cls(
-            smtp=SmtpConfig.from_environ(),
-            imap=ImapConfig.from_environ(),
-            ollama=OllamaConfig.from_environ(),
             meater=MeaterConfig.from_environ(),
             browser=BrowserConfig.from_environ(),
             sip=SipConfig.from_environ(),
@@ -625,9 +545,6 @@ class WachtmeaterConfig:
 
 
 SECTION_REGISTRY: dict[str, type[_EnvMixin]] = {
-    "smtp": SmtpConfig,
-    "imap": ImapConfig,
-    "ollama": OllamaConfig,
     "meater": MeaterConfig,
     "browser": BrowserConfig,
     "sip": SipConfig,

@@ -6,9 +6,9 @@ import pytest
 
 from wachtmeater.config import (
     AlertDefaultsConfig,
+    BrowserConfig,
     MonitoringConfig,
     SipConfig,
-    SmtpConfig,
     WachtmeaterConfig,
     _coerce,
 )
@@ -58,13 +58,13 @@ class TestSipConfigFromEnviron:
 
 
 class TestFromEnvironUsesDefaults:
-    def test_smtp_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_browser_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Clear any env vars that would override defaults
-        for key in ("SMTP_SERVER", "SMTP_SERVER_PORT"):
+        for key in ("BROWSER_CDP_URL", "SCREENSHOT_DIR"):
             monkeypatch.delenv(key, raising=False)
-        cfg = SmtpConfig.from_environ()
-        assert cfg.server == "smtp.example.com"
-        assert cfg.port == 587
+        cfg = BrowserConfig.from_environ()
+        assert cfg.cdp_url == "http://chrome-kasmvnc.kasmvnc.svc.cluster.local:9222"
+        assert cfg.screenshot_dir == "/data"
 
     def test_monitoring_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for key in ("CHECK_INTERVAL", "STALL_WINDOW", "AMBIENT_TEMP_DROP_THRESHOLD"):
@@ -119,9 +119,6 @@ class TestWachtmeaterConfigAllSections:
         # Ensure SIP_DEST has a value so downstream assertions work
         monkeypatch.setenv("SIP_DEST", "+4900000")
         cfg = WachtmeaterConfig.from_environ()
-        assert hasattr(cfg, "smtp")
-        assert hasattr(cfg, "imap")
-        assert hasattr(cfg, "ollama")
         assert hasattr(cfg, "meater")
         assert hasattr(cfg, "browser")
         assert hasattr(cfg, "sip")
