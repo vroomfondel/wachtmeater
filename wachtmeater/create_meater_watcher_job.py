@@ -26,6 +26,7 @@ Examples:
         $ wachtmeater deploy --delete --meater-url https://cooks.cloud.meater.com/cook/abc123
 """
 
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -34,6 +35,22 @@ from jinja2 import Template
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from loguru import logger
+
+
+def _load_kube_config() -> None:
+    """Load the Kubernetes client config, in-cluster when possible.
+
+    Picks ``load_incluster_config()`` when running inside a pod
+    (``KUBERNETES_SERVICE_HOST`` is set), otherwise falls back to
+    ``load_kube_config()`` reading ``~/.kube/config``.
+    """
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        logger.info("Loading in-cluster Kubernetes configuration...")
+        config.load_incluster_config()
+    else:
+        logger.info("Loading out-of-cluster Kubernetes configuration...")
+        config.load_kube_config()
+
 
 from wachtmeater import cfg, read_dot_env_to_environ
 
@@ -78,6 +95,7 @@ def build_config_content(meater_url: str) -> str:
         monitoring=cfg.monitoring,
         matrix=cfg.matrix,
         auth=cfg.auth,
+        alerts=cfg.alerts,
     )
 
 
@@ -126,8 +144,7 @@ def create_resources(meater_url: str, hostpath: str = "/mnt/nfs/meaterwatcher_sh
         SystemExit: If any of the required script files are missing on disk.
         ApiException: On unexpected Kubernetes API errors.
     """
-    logger.info("Loading Kubernetes configuration...")
-    config.load_kube_config()
+    _load_kube_config()
     v1 = client.CoreV1Api()
     batch_v1 = client.BatchV1Api()
 
@@ -290,8 +307,7 @@ def delete_resources(meater_url: str) -> None:
     Raises:
         ApiException: On unexpected Kubernetes API errors.
     """
-    logger.info("Loading Kubernetes configuration...")
-    config.load_kube_config()
+    _load_kube_config()
     v1 = client.CoreV1Api()
     batch_v1 = client.BatchV1Api()
 

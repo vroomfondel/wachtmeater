@@ -420,7 +420,7 @@ def run_meater_check(
         state.internal_temp_history = history
 
     # Build status text
-    lines = [f"MEATER Status: {cook_name}"]
+    lines = [f"MEATER Status: {cook_name}", f"URL: {MEATER_URL}"]
     if current_internal is not None:
         lines.append(f"Internal (Fleisch): {current_internal} C")
     if current_ambient is not None:

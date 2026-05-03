@@ -97,6 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp_d.add_argument("--meater-url", required=True, help="MEATER cook URL")
     sp_d.add_argument("--delete", action="store_true", help="Delete resources for this cook")
 
+    # operator
+    sub.add_parser(
+        "operator",
+        help="Run the long-running operator that spawns watcher jobs from Matrix commands",
+    )
+
     return parser
 
 
@@ -187,6 +193,23 @@ def main() -> None:
             delete_resources(args.meater_url)
         else:
             create_resources(args.meater_url)
+
+    elif args.command == "operator":
+        from wachtmeater.operator import main as op_main
+
+        op_main()
+
+
+def operator_main() -> None:
+    """Entry point for the ``wachtmeater-operator`` console script.
+
+    Convenience shim so a Pod can use ``command: ["wachtmeater-operator"]``
+    instead of ``["wachtmeater", "operator"]``.  Functionally equivalent
+    to ``wachtmeater operator`` — extra positional/optional arguments
+    are forwarded to the ``operator`` subparser unchanged.
+    """
+    sys.argv = [sys.argv[0], "operator", *sys.argv[1:]]
+    main()
 
 
 if __name__ == "__main__":

@@ -77,6 +77,20 @@ class TestBuildConfigContent:
             "crypto_store_path",
             "method",
             "operator_url",
+            # [alerts] block — must be propagated so spawned watchers
+            # inherit the operator's first-run alert defaults instead of
+            # the bare code defaults.
+            "tempalert_tempdown_enabled",
+            "tempalert_ruhephase_enabled",
+            "ruhephase_target_temp",
+            "tempalert_stall_enabled",
+            "stall_min_delta",
+            "tempalert_wrap_enabled",
+            "wrap_target_temp",
+            "tempalert_ambient_range_enabled",
+            "ambient_range_min",
+            "ambient_range_max",
+            "tempalert_cookend_enabled",
         ]
         for key in required:
             assert key in content, f"Missing key: {key}"

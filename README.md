@@ -52,8 +52,10 @@ When things go sideways (or the cook finishes), a SIP phone call is triggered au
 |---|---|
 | `meater_watcher` | Persistent async event loop: periodic MEATER checks + Matrix command interface |
 | `meater_monitor` | Single-shot CDP scraper: extracts temperatures, status, timing from a MEATER Cloud cook URL |
-| `create_meater_watcher_job` | Deploys the watcher stack as a Kubernetes Job (Namespace, ConfigMap, Secret, Job) |
+| `create_meater_watcher_job` | Deploys/destroys the watcher stack as a Kubernetes Job (Namespace, Secret, Job). In-cluster vs out-of-cluster auth detected automatically. |
+| `operator` | Long-running Matrix-driven controller: spawns/destroys/lists watcher Jobs from `operator …` chat commands. Pitmaster-MXID gate, auto-trusts own Matrix devices for cross-pod E2E. |
 | `call_pitmaster` | Triggers a SIP phone call via sipstuff-operator |
+| `matrix_adapter` | nio-based Matrix backend; configured-room (ID *or* `#alias:srv`) and per-cook auto-created room can both be active simultaneously |
 
 ## CLI Sub-Commands
 
@@ -64,6 +66,7 @@ When things go sideways (or the cook finishes), a SIP phone call is triggered au
 | `wachtmeater call <text>` | Trigger a SIP phone call via sipstuff-operator |
 | `wachtmeater send-matrix <text> [--image PATH] [--room ID]` | Send message (and optional screenshot) to Matrix rooms |
 | `wachtmeater deploy --meater-url <URL> [--delete]` | Deploy/delete MEATER watcher K8s Job |
+| `wachtmeater operator` | Long-running Matrix-driven controller. Same as `wachtmeater-operator` console script for K8s pods. |
 
 ## Matrix Commands
 
@@ -86,8 +89,21 @@ Send these in the Matrix room the bot has joined (case-insensitive):
 | `disable cookend` | Disable cook-end detection |
 | `reset stall` | Reset stall alert (re-arms after it fired) |
 | `reset wrap` | Reset wrap alert (re-arms after it fired) |
+| `testcall [<text>]` | Trigger a SIP phone call to the pitmaster with optional spoken text (default: `Wachtmeater Testanruf`). The text keeps its original case so TTS pronounces names correctly. |
 | `hilfe` / `help` / `?` | Show available commands |
 | `stop` / `quit` / `beenden` / `exit` | Shut down the watcher loop |
+
+## Operator Commands
+
+Operator commands are recognised only in the room configured as `MATRIX_OPERATOR_LISTENING_ROOM`, and only when the sender's MXID matches `MATRIX_PITMASTER`. Any other sender is silently ignored.
+
+| Command | Description |
+|---|---|
+| `operator new <MEATER_URL>` | Spawn a new watcher Job for the given cook URL. Calls `create_resources()` end-to-end (namespace + Secret + Job). |
+| `operator delete <spec>` | Delete a watcher. `<spec>` may be a full MEATER URL, the cook UUID, the 8-char short suffix, or the 1-based index from the most recent `operator list` reply. |
+| `operator list` | List active `meater-watcher-*` Jobs in the namespace with status (`Active`/`Succeeded`/`Failed`/`Pending`) and cook URL. The shown indices feed `operator delete <N>`. |
+| `operator status` | Operator's own health summary: uptime, K8s API reachability, watcher count, listening room. |
+| `operator help` / `hilfe` | Show available operator commands |
 
 ## Cook-End Detection
 
@@ -123,8 +139,10 @@ Settings are loaded from a TOML config file (`wachtmeater.toml` or path in `$CON
 | `MATRIX_PASSWORD` | Matrix bot password | — (**required**) |
 | `MATRIX_ROOM` | Default room ID or alias to join | `!exampleroom:matrix.example.com` |
 | `MATRIX_AUTO_CREATE_ROOM` | Auto-create an E2E-encrypted Matrix room per cook UUID | `false` |
-| `MATRIX_PITMASTER` | Matrix user ID to invite into auto-created rooms | `""` |
+| `MATRIX_PITMASTER` | Matrix user ID to invite into auto-created rooms; also the only MXID allowed to issue `operator …` commands | `""` |
+| `MATRIX_OPERATOR_LISTENING_ROOM` | Room (`!id:srv` *or* `#alias:srv`) the operator listens in for `operator …` commands | `""` |
 | `CRYPTO_STORE_PATH` | Path for E2E encryption crypto store | `/data/crypto_store` |
+| `OPERATOR_CRYPTO_STORE_PATH` | Separate crypto store for the operator pod (avoids SQLite races with watcher pods sharing the same MXID) | `/data/operator_crypto_store` |
 | `AUTH_METHOD` | Auth method (`password` or `jwt`) | `password` |
 | `KEYCLOAK_URL` | Keycloak base URL (required if `jwt`) | — |
 | `KEYCLOAK_REALM` | Keycloak realm name | — |
@@ -132,6 +150,24 @@ Settings are loaded from a TOML config file (`wachtmeater.toml` or path in `$CON
 | `KEYCLOAK_CLIENT_SECRET` | Keycloak client secret | `""` |
 | `JWT_LOGIN_TYPE` | Matrix login type for JWT | `com.famedly.login.token.oauth` |
 | `SOPERATORURL` | sipstuff-operator call endpoint | `http://sipstuff-operator.sipstuff.svc.cluster.local/call` |
+
+### Alert defaults (first run only)
+
+These set the initial values written into a fresh per-cook state file. Once the watcher has saved state, runtime `enable …` / `disable …` Matrix commands take precedence — changes to these env vars are ignored on subsequent runs unless the state file is removed. The operator propagates all of these into spawned watcher TOMLs so each new cook starts with the operator's preferred profile.
+
+| Variable | Description | Default |
+|---|---|---|
+| `ALERT_DEFAULT_TEMPDOWN_ENABLED` | Ambient temp drop alert (fire-out detection) | `true` |
+| `ALERT_DEFAULT_RUHEPHASE_ENABLED` | Rest/cooldown alert | `false` |
+| `ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP` | Target cooldown temp (°C) | `0.0` |
+| `ALERT_DEFAULT_STALL_ENABLED` | Stall detection | `false` |
+| `ALERT_DEFAULT_STALL_MIN_DELTA` | Min internal-temp rise (°C) over the stall window | `1.0` |
+| `ALERT_DEFAULT_WRAP_ENABLED` | One-shot wrap reminder | `false` |
+| `ALERT_DEFAULT_WRAP_TARGET_TEMP` | Internal temp (°C) at which to remind about wrapping | `0.0` |
+| `ALERT_DEFAULT_AMBIENT_RANGE_ENABLED` | Smoker too hot / too cold alert | `false` |
+| `ALERT_DEFAULT_AMBIENT_RANGE_MIN` | Min acceptable ambient temp (°C) | `0.0` |
+| `ALERT_DEFAULT_AMBIENT_RANGE_MAX` | Max acceptable ambient temp (°C) | `0.0` |
+| `ALERT_DEFAULT_COOKEND_ENABLED` | Cook-end auto-detection | `true` |
 
 ## Installation
 
@@ -162,13 +198,17 @@ Override settings in `runcli.local.include.sh` (sourced automatically, gitignore
 
 ## Kubernetes Deployment
 
+There are two ways to run watcher Jobs in a cluster:
+
+### A) Direct CLI deploy (one cook at a time)
+
 ```bash
 wachtmeater deploy --meater-url https://cooks.cloud.meater.com/cook/<uuid>
 ```
 
-This creates: Namespace `meater`, ConfigMap with scripts, Secret with `.env`, and a Job running `xomoxcc/wachtmeater:latest`.
+This creates: Namespace `meater`, Secret with the rendered `wachtmeater.toml`, and a Job running `xomoxcc/wachtmeater:latest`. Auth picks `load_incluster_config()` automatically when `KUBERNETES_SERVICE_HOST` is set, otherwise reads `~/.kube/config`.
 
-To tear down (deletes the per-cook Job, Secret, and ConfigMap; the shared `meater` namespace is kept):
+To tear down (deletes the per-cook Job and Secret; the shared `meater` namespace is kept):
 
 ```bash
 wachtmeater deploy --meater-url https://cooks.cloud.meater.com/cook/<uuid> --delete
@@ -183,6 +223,37 @@ python -m wachtmeater.create_meater_watcher_job --delete
 ```
 
 </details>
+
+### B) Operator (Matrix-driven, always-on)
+
+For a more permanent setup, deploy the **wachtmeater operator** as a long-running Pod in the cluster. It listens in a configured Matrix room for `operator new`, `operator delete`, `operator list`, and `operator status` chat messages — so spawning a new watcher for the next cook is just a Matrix message away, no `kubectl` required.
+
+The operator uses the same Matrix MXID as the watchers it spawns and auto-trusts every device of its own MXID at startup, so cross-pod E2E decryption works without manual verification. A separate crypto-store path (`OPERATOR_CRYPTO_STORE_PATH`) prevents SQLite-store races with watcher pods.
+
+Reference manifests are in [`k8s/operator/`](k8s/operator/):
+
+| File | Purpose |
+|---|---|
+| `serviceaccount.yaml` | Dedicated ServiceAccount `wachtmeater-operator` |
+| `role.yaml` / `rolebinding.yaml` | Namespaced RBAC (jobs/secrets/pods in `meater`) |
+| `deployment.yaml` | `replicas: 1`, `strategy: Recreate`, runs `wachtmeater-operator` console script |
+| `configmap.example.yaml` | Example `wachtmeater.local.toml` — copy and fill in |
+| `README.md` | Step-by-step setup |
+
+Quickstart:
+
+```bash
+kubectl create namespace meater
+kubectl -n meater create configmap wachtmeater-operator-config \
+    --from-file=wachtmeater.local.toml=./wachtmeater.local.toml
+kubectl apply -f k8s/operator/serviceaccount.yaml
+kubectl apply -f k8s/operator/role.yaml
+kubectl apply -f k8s/operator/rolebinding.yaml
+kubectl apply -f k8s/operator/deployment.yaml
+kubectl -n meater logs deploy/wachtmeater-operator -f
+```
+
+The ConfigMap entry is mounted via `subPath` into the container's WORKDIR (`/app/wachtmeater.local.toml`), so the file is picked up by the built-in config-file lookup in `read_dot_env_to_environ()` — no `CONFIG` env var needed.
 
 ## Development
 

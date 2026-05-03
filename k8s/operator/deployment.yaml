@@ -1,0 +1,59 @@
+---
+# Wachtmeater Operator — long-running pod that listens in a Matrix room
+# and spawns/destroys per-cook watcher Jobs.  See README.md for setup.
+#
+# Variables to substitute (or templated by Ansible):
+#   IMAGE                       — Docker image (e.g. xomoxcc/wachtmeater:latest)
+#   HOSTPATH                    — host directory mounted at /data
+#                                 (e.g. /mnt/nfs/meaterwatcher_shared)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wachtmeater-operator
+  namespace: meater
+  labels:
+    app: wachtmeater-operator
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate           # only one operator may run at a time (single Matrix session)
+  selector:
+    matchLabels:
+      app: wachtmeater-operator
+  template:
+    metadata:
+      labels:
+        app: wachtmeater-operator
+    spec:
+      serviceAccountName: wachtmeater-operator
+      containers:
+        - name: operator
+          image: xomoxcc/wachtmeater:latest
+          imagePullPolicy: Always
+          command: ["wachtmeater-operator"]
+          volumeMounts:
+            # Mount the ConfigMap entry directly into /app (the WORKDIR /
+            # cwd) so `read_dot_env_to_environ()` finds it as
+            # `cwd/wachtmeater.local.toml` via its built-in lookup — no
+            # CONFIG env var needed.
+            - name: config
+              mountPath: /app/wachtmeater.local.toml
+              subPath: wachtmeater.local.toml
+              readOnly: true
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: wachtmeater-operator-config
+        - name: data
+          hostPath:
+            path: /mnt/nfs/meaterwatcher_shared
+            type: DirectoryOrCreate

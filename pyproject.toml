@@ -92,3 +92,4 @@ ignore_missing_imports = true
 
 [project.scripts]
 wachtmeater = "wachtmeater.cli:main"
+wachtmeater-operator = "wachtmeater.cli:operator_main"

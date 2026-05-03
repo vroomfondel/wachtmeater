@@ -61,7 +61,9 @@ Environment variable reference
 **[matrix]** — Matrix messaging:
     ``MATRIX_ROOM``, ``MATRIX_SERVER_ADDRESS``, ``MATRIX_USER``,
     ``MATRIX_HOMESERVER``, ``MATRIX_PASSWORD``, ``CRYPTO_STORE_PATH``,
-    ``MATRIX_AUTO_CREATE_ROOM`` (``false``), ``MATRIX_PITMASTER``.
+    ``MATRIX_AUTO_CREATE_ROOM`` (``false``), ``MATRIX_PITMASTER``,
+    ``MATRIX_OPERATOR_LISTENING_ROOM``,
+    ``OPERATOR_CRYPTO_STORE_PATH`` (``/data/operator_crypto_store``).
 
 **[auth]** — Authentication / Keycloak:
     ``AUTH_METHOD`` (``password``), ``KEYCLOAK_URL``, ``KEYCLOAK_REALM``,
@@ -351,8 +353,14 @@ class MatrixConfig(_EnvMixin):
             (``CRYPTO_STORE_PATH``).
         auto_create_room_for_meater_uuid: Whether to auto-create a room per
             cook UUID (``MATRIX_AUTO_CREATE_ROOM``).
-        pitmaster: Matrix user ID to invite into auto-created rooms
+        pitmaster: Matrix user ID to invite into auto-created rooms; also
+            the only MXID allowed to issue ``operator …`` commands
             (``MATRIX_PITMASTER``).
+        operator_listening_room: Room ID/alias the ``wachtmeater operator``
+            listens in (``MATRIX_OPERATOR_LISTENING_ROOM``).
+        operator_crypto_store_path: Separate crypto store for the operator
+            so it does not race with watcher pods on the same SQLite DB
+            (``OPERATOR_CRYPTO_STORE_PATH``).
     """
 
     room: str = env("MATRIX_ROOM", default="!exampleroom:matrix.example.com")
@@ -363,6 +371,8 @@ class MatrixConfig(_EnvMixin):
     crypto_store_path: str = env("CRYPTO_STORE_PATH", default="/data/crypto_store")
     auto_create_room_for_meater_uuid: bool = env("MATRIX_AUTO_CREATE_ROOM", default=False)
     pitmaster: str = env("MATRIX_PITMASTER", default="")
+    operator_listening_room: str = env("MATRIX_OPERATOR_LISTENING_ROOM", default="")
+    operator_crypto_store_path: str = env("OPERATOR_CRYPTO_STORE_PATH", default="/data/operator_crypto_store")
 
 
 @envdataclass

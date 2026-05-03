@@ -40,12 +40,20 @@ class MatrixMessagingAdapter:
 
     logger: ClassVar = logger.bind(classname="MatrixMessagingAdapter")
 
-    def __init__(self) -> None:
-        """Initialise the adapter with a ``MatrixClientHandler``."""
+    def __init__(self, crypto_store_path: str | None = None) -> None:
+        """Initialise the adapter with a ``MatrixClientHandler``.
+
+        Args:
+            crypto_store_path: Override for the nio E2EE store directory.
+                Defaults to ``cfg.matrix.crypto_store_path``.  The
+                operator passes ``cfg.matrix.operator_crypto_store_path``
+                here to avoid SQLite races with watcher pods that share
+                the same Matrix user.
+        """
         self._handler = MatrixClientHandler(
             homeserver=cfg.matrix.homeserver,
             user=cfg.matrix.user,
-            crypto_store_path=cfg.matrix.crypto_store_path,
+            crypto_store_path=crypto_store_path or cfg.matrix.crypto_store_path,
         )
 
     async def connect(self) -> None:

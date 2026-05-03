@@ -47,14 +47,17 @@ Long cooks (10-16 h) mean you sleep while the meat is on — and miss it when th
 
 - Periodically scrapes a MEATER Cloud cook URL via a remote Chrome browser (CDP)
 - Posts temperature status (internal, ambient, target) to E2E-encrypted Matrix rooms
-- Auto-creates a dedicated Matrix room per cook UUID (optional)
-- Listens for Matrix commands to enable/disable alerts (tempdown, stall, wrap, ruhephase, ambient range, cookend)
+- Auto-creates a dedicated Matrix room per cook UUID; can simultaneously broadcast to a fixed operator room (room ID *or* `#alias:srv`)
+- Listens for Matrix commands to enable/disable alerts (tempdown, stall, wrap, ruhephase, ambient range, cookend) and for `testcall [<text>]` to dial the pitmaster on demand
 - Cook-end detection via 4 mechanisms: consecutive fetch errors, probe removed, target reached, MEATER Cloud "finished" state
 - Triggers SIP phone calls via sipstuff-operator when alerts fire
+- Ships an in-cluster **operator** mode (`wachtmeater-operator`) that spawns/destroys/lists per-cook watcher Jobs from Matrix `operator new <url>` / `operator delete <spec>` / `operator list` commands — only the configured pitmaster MXID may issue them
 - Persists state per cook UUID for resumable monitoring
-- TOML config support (`wachtmeater.toml`) alongside env vars / `.env`
+- TOML config support (`wachtmeater.toml` / `wachtmeater.local.toml`) alongside env vars / `.env`
 
 ## Quick Start
+
+### Watcher (one cook)
 
 ```bash
 docker run --rm \
@@ -65,6 +68,20 @@ docker run --rm \
   -e MATRIX_PASSWORD=secret \
   xomoxcc/wachtmeater:latest wachtmeater watcher
 ```
+
+### Operator (Matrix-driven controller)
+
+```bash
+docker run --rm \
+  -e MATRIX_HOMESERVER=https://matrix.example.com \
+  -e MATRIX_USER=@bot:example.com \
+  -e MATRIX_PASSWORD=secret \
+  -e MATRIX_PITMASTER=@you:example.com \
+  -e MATRIX_OPERATOR_LISTENING_ROOM='#wachtmeater-ops:matrix.example.com' \
+  xomoxcc/wachtmeater:latest wachtmeater-operator
+```
+
+In the listening room, the pitmaster MXID can then send `operator new https://cooks.cloud.meater.com/cook/<uuid>` to spawn a watcher Job, `operator list` to inspect, `operator delete <uuid|short|index>` to tear down. See the [README](https://github.com/vroomfondel/wachtmeater#operator-commands) for the full operator command reference.
 
 ## Key Environment Variables
 
@@ -80,6 +97,9 @@ docker run --rm \
 | `COOKEND_ERROR_THRESHOLD` | Consecutive fetch errors before cook-end (default: 3) |
 | `COOKEND_PROBE_REMOVED_TEMP` | Internal temp (°C) below which probe counts as removed (default: 35.0) |
 | `MATRIX_AUTO_CREATE_ROOM` | Auto-create E2E-encrypted Matrix room per cook (default: false) |
+| `MATRIX_PITMASTER` | MXID allowed to issue `operator …` commands |
+| `MATRIX_OPERATOR_LISTENING_ROOM` | Room ID/alias the operator listens in |
+| `OPERATOR_CRYPTO_STORE_PATH` | Separate nio crypto store for the operator (default: `/data/operator_crypto_store`) |
 | `SOPERATORURL` | sipstuff-operator call endpoint |
 
 See the full [README](https://github.com/vroomfondel/wachtmeater#configuration) for all options.

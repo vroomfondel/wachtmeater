@@ -1,0 +1,80 @@
+---
+# Example ConfigMap — the operator pod expects this entry to be mounted
+# at /app/wachtmeater.local.toml (see deployment.yaml).
+# Copy and replace placeholder values before applying.
+#
+# Apply with:
+#   kubectl -n meater apply -f configmap.example.yaml
+#
+# Or, in production, generate from a real wachtmeater.local.toml file:
+#   kubectl -n meater create configmap wachtmeater-operator-config \
+#       --from-file=wachtmeater.local.toml=./operator-wachtmeater.local.toml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wachtmeater-operator-config
+  namespace: meater
+data:
+  wachtmeater.local.toml: |
+    [browser]
+    cdp_url        = "http://chrome-kasmvnc.kasmvnc.svc.cluster.local:9222"
+    screenshot_dir = "/data"
+
+    [matrix]
+    homeserver        = "http://synapse.matrix.svc.cluster.local:8008"
+    server_address    = "http://synapse.matrix.svc.cluster.local:8008"
+    user              = "@wachtmeater:matrix.example.com"
+    password          = "REPLACE_ME"
+    room              = ""
+    crypto_store_path = "/data/crypto_store"
+    operator_listening_room = "#wachtmeater-ops:matrix.example.com"
+    operator_crypto_store_path = "/data/operator_crypto_store"
+    auto_create_room_for_meater_uuid = false
+    pitmaster         = "@pitmaster:matrix.example.com"
+
+    [auth]
+    method                 = "password"
+    keycloak_url           = ""
+    keycloak_realm         = ""
+    keycloak_client_id     = ""
+    keycloak_client_secret = ""
+    jwt_login_type         = ""
+
+    [k8s]
+    image       = "xomoxcc/wachtmeater:latest"
+    job_command = ["wachtmeater", "watcher"]
+    namespace   = "meater"
+
+    [sip]
+    operator_url  = "http://sipstuff-operator.sipstuff.svc.cluster.local/call"
+    recording_dir = "/data/recordings"
+    dest          = "+490000000000"
+    server        = ""
+    port          = 5161
+    transport     = "tls"
+    srtp          = "mandatory"
+    user          = ""
+    password      = ""
+
+    [monitoring]
+    check_interval              = 600
+    ambient_temp_drop_threshold = 10
+    stall_window                = 3
+    cookend_probe_removed_temp  = 35
+
+    # First-run alert defaults — propagated into spawned watcher TOMLs by
+    # create_meater_watcher_job.build_config_content(), so each new cook
+    # starts with these settings.  Toggle later via Matrix `enable …` /
+    # `disable …` commands at runtime.
+    [alerts]
+    tempalert_tempdown_enabled       = true
+    tempalert_ruhephase_enabled      = false
+    ruhephase_target_temp            = 0.0
+    tempalert_stall_enabled          = true
+    stall_min_delta                  = 1.0
+    tempalert_wrap_enabled           = true
+    wrap_target_temp                 = 75.0
+    tempalert_ambient_range_enabled  = false
+    ambient_range_min                = 0.0
+    ambient_range_max                = 0.0
+    tempalert_cookend_enabled        = true

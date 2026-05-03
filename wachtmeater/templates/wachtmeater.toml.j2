@@ -49,3 +49,16 @@ keycloak_realm         = "{{ auth.keycloak_realm }}"
 keycloak_client_id     = "{{ auth.keycloak_client_id }}"
 keycloak_client_secret = "{{ auth.keycloak_client_secret }}"
 jwt_login_type         = "{{ auth.jwt_login_type }}"
+
+[alerts]
+tempalert_tempdown_enabled       = {{ alerts.tempalert_tempdown_enabled | tojson }}
+tempalert_ruhephase_enabled      = {{ alerts.tempalert_ruhephase_enabled | tojson }}
+ruhephase_target_temp            = {{ alerts.ruhephase_target_temp }}
+tempalert_stall_enabled          = {{ alerts.tempalert_stall_enabled | tojson }}
+stall_min_delta                  = {{ alerts.stall_min_delta }}
+tempalert_wrap_enabled           = {{ alerts.tempalert_wrap_enabled | tojson }}
+wrap_target_temp                 = {{ alerts.wrap_target_temp }}
+tempalert_ambient_range_enabled  = {{ alerts.tempalert_ambient_range_enabled | tojson }}
+ambient_range_min                = {{ alerts.ambient_range_min }}
+ambient_range_max                = {{ alerts.ambient_range_max }}
+tempalert_cookend_enabled        = {{ alerts.tempalert_cookend_enabled | tojson }}
