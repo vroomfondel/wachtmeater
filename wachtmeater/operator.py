@@ -29,7 +29,7 @@ import asyncio
 import re
 import signal
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from kubernetes import client
 from kubernetes.client import ApiException
@@ -207,9 +207,30 @@ def _format_list(rows: list[tuple[str, str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _format_uptime(delta: timedelta) -> str:
+    """Render a ``timedelta`` as a compact ``2d 3h 15m 7s`` string.
+
+    Drops leading zero units; always shows seconds so very short uptimes
+    (``58s``) remain readable.
+    """
+    total = int(delta.total_seconds())
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or days:
+        parts.append(f"{hours}h")
+    if minutes or hours or days:
+        parts.append(f"{minutes}m")
+    parts.append(f"{seconds}s")
+    return " ".join(parts)
+
+
 def _format_status(state: OperatorState) -> str:
     """Render ``operator status`` summary."""
-    uptime = datetime.now(timezone.utc) - state.started_at
+    uptime = _format_uptime(datetime.now(timezone.utc) - state.started_at)
     try:
         rows = _list_watcher_jobs()
         api_ok = True
