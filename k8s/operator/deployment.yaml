@@ -30,7 +30,7 @@ spec:
         - name: operator
           image: xomoxcc/wachtmeater:latest
           imagePullPolicy: Always
-          command: ["wachtmeater-operator"]
+          command: ["tini", "--", "wachtmeater-operator"]
           volumeMounts:
             # Mount the ConfigMap entry directly into /app (the WORKDIR /
             # cwd) so `read_dot_env_to_environ()` finds it as
