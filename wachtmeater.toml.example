@@ -62,5 +62,5 @@ jwt_login_type      = "com.famedly.login.token.oauth"
 
 [k8s]
 image       = "xomoxcc/wachtmeater:latest"
-job_command = ["wachtmeater", "watcher"]
+job_command = ["tini", "--", "wachtmeater", "watcher"]
 namespace   = "meater"
