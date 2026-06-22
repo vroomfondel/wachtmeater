@@ -14,10 +14,15 @@ Output:
     elapsed/remaining time, and battery level.
 """
 
+import base64
+import json
+import os
 import re
+import socket
 from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple, TypedDict
+from urllib.parse import urlparse
 
 import requests
 
@@ -126,6 +131,93 @@ def _parse_time_str(time_str: str) -> int | None:
     return None
 
 
+def _cdp_ping(ws_url: str, timeout: float = 3.0) -> bool:
+    """Best-effort liveness check of a single CDP target via a raw WebSocket.
+
+    Opens the target's debugger WebSocket and issues ``Runtime.evaluate``.
+    A hung/zombie renderer still completes the WS upgrade but never answers
+    CDP commands, so a missing reply within ``timeout`` means the tab is dead.
+
+    Uses only the stdlib (no extra ws dependency). Returns ``True`` if the
+    target replied, ``False`` on any error/timeout.
+    """
+    try:
+        u = urlparse(ws_url)
+        host = u.hostname or "localhost"
+        port = u.port or 80
+        path = u.path or "/"
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            key = base64.b64encode(os.urandom(16)).decode()
+            handshake = (
+                f"GET {path} HTTP/1.1\r\n"
+                f"Host: {host}:{port}\r\n"
+                "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            )
+            s.sendall(handshake.encode())
+            hdr = b""
+            while b"\r\n\r\n" not in hdr:
+                chunk = s.recv(1)
+                if not chunk:
+                    return False
+                hdr += chunk
+            if b" 101 " not in hdr.split(b"\r\n", 1)[0]:
+                return False
+            msg = json.dumps(
+                {
+                    "id": 1,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": "1", "returnByValue": True},
+                },
+                separators=(",", ":"),
+            ).encode()
+            # Client->server frames must be masked (RFC 6455); payload < 126 bytes.
+            mask = os.urandom(4)
+            masked = bytes(b ^ mask[i % 4] for i, b in enumerate(msg))
+            frame = bytes([0x81, 0x80 | len(msg)]) + mask + masked
+            s.sendall(frame)
+            return b'"id":1' in s.recv(4096)
+    except Exception:
+        return False
+
+
+def _reap_unresponsive_targets(cdp_endpoint: str, cdp_host: str) -> None:
+    """Close hung/zombie page tabs in a SHARED Chrome before connecting.
+
+    Playwright's ``connect_over_cdp`` attaches to and initialises *every* open
+    page; a single unresponsive renderer makes the whole connect hang until
+    timeout. The Chrome instance is shared (e.g. wachtmeater + clawdbot), so we
+    only close tabs that fail a liveness ping — healthy tabs are left alone.
+
+    Entirely best-effort: any failure is logged and swallowed so it can never
+    break the monitoring flow.
+    """
+    try:
+        targets = requests.get(f"{cdp_endpoint}/json/list", timeout=10).json()
+    except Exception as e:
+        logger.warning(f"Tab reaper: could not list CDP targets: {e}")
+        return
+    for t in targets:
+        if t.get("type") != "page":
+            continue
+        ws = t.get("webSocketDebuggerUrl", "")
+        if not ws:
+            continue
+        ws = ws.replace("ws://localhost:9222", f"ws://{cdp_host}")
+        if _cdp_ping(ws):
+            continue
+        tid = t.get("id")
+        try:
+            requests.get(f"{cdp_endpoint}/json/close/{tid}", timeout=10)
+            logger.warning(
+                f"Tab reaper: closed unresponsive tab {tid} "
+                f"({t.get('title')!r} {t.get('url', '')[:60]})"
+            )
+        except Exception as e:
+            logger.warning(f"Tab reaper: failed to close tab {tid}: {e}")
+
+
 def extract_via_browser(url: str) -> CookData:
     """Scrape the rendered MEATER cook page via a remote CDP browser.
 
@@ -158,9 +250,15 @@ def extract_via_browser(url: str) -> CookData:
     except Exception as e:
         raise Exception(f"Failed to get WebSocket URL: {e}")
 
+    # Defend against a hung tab in the shared Chrome wedging connect_over_cdp:
+    # close any unresponsive tabs first, leaving healthy (foreign) tabs intact.
+    _reap_unresponsive_targets(CDP_ENDPOINT, cdp_host)
+
     with sync_playwright() as p:
         logger.info("Connecting to browser via CDP...")
-        browser = p.chromium.connect_over_cdp(ws_url)
+        # Bounded timeout: if a fresh zombie appears between reaping and
+        # connecting, fail fast (60s) instead of blocking the default 180s.
+        browser = p.chromium.connect_over_cdp(ws_url, timeout=60000)
         context = browser.contexts[0] if browser.contexts else browser.new_context()
         page = context.pages[0] if context.pages else context.new_page()
 
