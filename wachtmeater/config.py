@@ -494,6 +494,8 @@ class WatcherState:
     tempalert_station_offline_enabled: bool = True
     offline_streak: int = 0
     station_offline_call_sent: bool = False
+    # Startup behaviour
+    startup_test_call_enabled: bool = True
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "WatcherState":

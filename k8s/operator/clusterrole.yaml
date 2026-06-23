@@ -1,0 +1,12 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: wachtmeater-operator
+rules:
+  # Namespaces are cluster-scoped, so read access cannot live in the namespaced
+  # Role — it must come from a ClusterRole. The operator only needs to verify
+  # that the `meater` namespace exists before deploying watcher resources.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
