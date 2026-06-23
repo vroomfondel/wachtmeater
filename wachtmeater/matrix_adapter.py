@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from nio import UploadResponse
+from nio.exceptions import LocalProtocolError
 
 from wachtmeater.messaging import MessageCallback, RoomSelection
 
@@ -55,6 +56,9 @@ class MatrixMessagingAdapter:
             user=cfg.matrix.user,
             crypto_store_path=crypto_store_path or cfg.matrix.crypto_store_path,
         )
+        # Set by ``stop_sync`` so the resilient ``start_sync`` loop knows a
+        # clean shutdown was requested (vs. a recoverable sync error).
+        self._stop_requested = False
 
     async def connect(self) -> None:
         """Authenticate, import old E2EE keys, and perform an initial sync."""
@@ -280,11 +284,29 @@ class MatrixMessagingAdapter:
         self._handler.add_event_callback(_nio_adapter, RoomMessageText)
 
     async def start_sync(self) -> None:
-        """Begin the long-polling sync loop (blocks until stopped)."""
-        await self._handler.sync_forever(timeout=30000)
+        """Begin the long-polling sync loop (blocks until stopped).
+
+        Resilient against nio's benign ``LocalProtocolError("No key query
+        required.")``: nio's ``sync_forever`` schedules a ``keys_query`` when
+        ``should_query_keys`` is set, but the query list can be empty by the
+        time the task runs, raising this error and tearing down the whole sync
+        loop.  Treating it as fatal previously crashed the watcher (exit 1)
+        roughly every time a key query became due, triggering pod restarts.
+        Here we swallow it and resume syncing unless a stop was requested.
+        """
+        self._stop_requested = False
+        while not self._stop_requested:
+            try:
+                await self._handler.sync_forever(timeout=30000)
+                return
+            except LocalProtocolError as exc:
+                if self._stop_requested or "No key query required" not in str(exc):
+                    raise
+                MatrixMessagingAdapter.logger.debug(f"Ignoring benign nio key-query race, resuming sync: {exc}")
 
     def stop_sync(self) -> None:
         """Signal the sync loop to stop."""
+        self._stop_requested = True
         self._handler.stop_sync()
 
     async def send_one(self, status_text: str, image_path: str | None, room_id_arg: str | None = None) -> None:

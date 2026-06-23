@@ -89,6 +89,31 @@ class CookData(NamedTuple):
     screenshot: Path | str | None = None
 
 
+class MeaterFetchError(Exception):
+    """Base class for failures while fetching MEATER cook data."""
+
+
+class CdpUnavailableError(MeaterFetchError):
+    """The CDP browser endpoint was unreachable, hung, or timed out.
+
+    Represents an infrastructure problem on *our* side — the CDP endpoint
+    being down, the WebSocket handshake timing out, or the navigation
+    stalling.  This is explicitly NOT evidence that the cook has ended;
+    callers must treat it as a transient outage and never escalate it to
+    cook-end detection.
+    """
+
+
+class CookNotFoundError(MeaterFetchError):
+    """The MEATER cook URL / cook ID no longer exists.
+
+    The share page responded with a not-found status (HTTP 4xx), meaning
+    the cook was deleted or expired upstream.  Unlike
+    :class:`CdpUnavailableError`, this is legitimate evidence that the
+    cook has ended.
+    """
+
+
 CDP_ENDPOINT: str = cfg.browser.cdp_url
 SCREENSHOT_DIR: Path = Path(cfg.browser.screenshot_dir or str((Path(__file__).resolve().parent / "data").resolve()))
 SCREENSHOT_DIR = SCREENSHOT_DIR.resolve()
@@ -210,10 +235,7 @@ def _reap_unresponsive_targets(cdp_endpoint: str, cdp_host: str) -> None:
         tid = t.get("id")
         try:
             requests.get(f"{cdp_endpoint}/json/close/{tid}", timeout=10)
-            logger.warning(
-                f"Tab reaper: closed unresponsive tab {tid} "
-                f"({t.get('title')!r} {t.get('url', '')[:60]})"
-            )
+            logger.warning(f"Tab reaper: closed unresponsive tab {tid} ({t.get('title')!r} {t.get('url', '')[:60]})")
         except Exception as e:
             logger.warning(f"Tab reaper: failed to close tab {tid}: {e}")
 
@@ -236,9 +258,12 @@ def extract_via_browser(url: str) -> CookData:
         Exception: If the CDP WebSocket URL cannot be retrieved or the
             browser connection fails.
     """
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 
-    # First, get the WebSocket URL from the CDP endpoint
+    # First, get the WebSocket URL from the CDP endpoint.  A failure here
+    # means our CDP infrastructure is unreachable — a transient, our-side
+    # problem, never a sign that the cook itself has ended.
     try:
         logger.info(f"Fetching CDP WebSocket URL from {CDP_ENDPOINT}")
         resp = requests.get(f"{CDP_ENDPOINT}/json/version", timeout=10)
@@ -248,7 +273,7 @@ def extract_via_browser(url: str) -> CookData:
         ws_url = ws_url.replace("ws://localhost:9222", f"ws://{cdp_host}")
         logger.debug(f"CDP WebSocket URL: {ws_url}")
     except Exception as e:
-        raise Exception(f"Failed to get WebSocket URL: {e}")
+        raise CdpUnavailableError(f"Failed to get WebSocket URL: {e}") from e
 
     # Defend against a hung tab in the shared Chrome wedging connect_over_cdp:
     # close any unresponsive tabs first, leaving healthy (foreign) tabs intact.
@@ -258,13 +283,25 @@ def extract_via_browser(url: str) -> CookData:
         logger.info("Connecting to browser via CDP...")
         # Bounded timeout: if a fresh zombie appears between reaping and
         # connecting, fail fast (60s) instead of blocking the default 180s.
-        browser = p.chromium.connect_over_cdp(ws_url, timeout=60000)
+        # A connect timeout/failure is a CDP-side outage, not cook-end.
+        try:
+            browser = p.chromium.connect_over_cdp(ws_url, timeout=60000)
+        except Exception as e:
+            raise CdpUnavailableError(f"CDP connect failed: {e}") from e
         context = browser.contexts[0] if browser.contexts else browser.new_context()
         page = context.pages[0] if context.pages else context.new_page()
 
         try:
             logger.info(f"Navigating to {url}")
-            page.goto(url, timeout=30000)
+            # Capture the navigation response so we can tell a genuine
+            # "cook no longer exists" (HTTP 4xx) apart from a navigation
+            # timeout (our-side network/CDP stall).
+            try:
+                response = page.goto(url, timeout=30000)
+            except PlaywrightTimeoutError as e:
+                raise CdpUnavailableError(f"Navigation to cook URL timed out: {e}") from e
+            if response is not None and response.status in (404, 410):
+                raise CookNotFoundError(f"Cook URL returned HTTP {response.status} — cook no longer exists: {url}")
             logger.debug("Waiting 5s for page content to load...")
             page.wait_for_timeout(5000)  # Wait for content to load
 
