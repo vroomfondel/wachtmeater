@@ -87,6 +87,12 @@ Send these in the Matrix room the bot has joined (case-insensitive):
 | `disable ambient` | Disable ambient range alert |
 | `enable cookend` | Enable cook-end detection (auto-stop) |
 | `disable cookend` | Disable cook-end detection |
+| `enable offline` | Enable station-offline alert (SIP phone call on prolonged station outage) |
+| `disable offline` | Disable station-offline alert |
+| `enable startcall` | Enable the startup test call (applied on the next watcher start) |
+| `disable startcall` | Disable the startup test call |
+| `set interval <secs>` | Override the periodic check interval (seconds); applies from the next cycle, persists per cook (min 30 s) |
+| `reset interval` | Restore the config-default check interval |
 | `reset stall` | Reset stall alert (re-arms after it fired) |
 | `reset wrap` | Reset wrap alert (re-arms after it fired) |
 | `testcall [<text>]` | Trigger a SIP phone call to the pitmaster with optional spoken text (default: `Wachtmeater Testanruf`). The text keeps its original case so TTS pronounces names correctly. |
@@ -101,6 +107,7 @@ Operator commands are recognised only in the room configured as `MATRIX_OPERATOR
 |---|---|
 | `operator new <MEATER_URL>` | Spawn a new watcher Job for the given cook URL. Calls `create_resources()` end-to-end (namespace + Secret + Job). |
 | `operator delete <spec>` | Delete a watcher. `<spec>` may be a full MEATER URL, the cook UUID, the 8-char short suffix, or the 1-based index from the most recent `operator list` reply. |
+| `operator resume <spec>` | Recreate a watcher whose cook was already ended, with cook-end detection disabled so it keeps monitoring. Same `<spec>` forms as `operator delete`. |
 | `operator list` | List active `meater-watcher-*` Jobs in the namespace with status (`Active`/`Succeeded`/`Failed`/`Pending`) and cook URL. The shown indices feed `operator delete <N>`. |
 | `operator status` | Operator's own health summary: uptime, K8s API reachability, watcher count, listening room. |
 | `operator help` / `hilfe` | Show available operator commands |
@@ -122,6 +129,17 @@ Mechanisms A, B, and D post a Matrix message and trigger a SIP phone call. Mecha
 
 Settings are loaded from a TOML config file (`wachtmeater.toml` or path in `$CONFIG`), a flat `.env` file, or plain environment variables. Existing env vars always take precedence. See `wachtmeater.toml.example` for a full annotated example.
 
+### Local setup
+
+`wachtmeater.toml.example` is the only config committed to git. For local development, create your own config from it:
+
+```bash
+cp wachtmeater.toml.example wachtmeater.local.toml
+# then edit wachtmeater.local.toml with your MEATER URL, Matrix and SIP credentials
+```
+
+`wachtmeater.local.toml` is **git-ignored** (`*.local.*`) and never committed — keep your real credentials there. It is picked up automatically: `read_dot_env_to_environ()` searches (package dir, then CWD) for `wachtmeater.toml` → `.env` → `.local.env` → `wachtmeater.local.toml`. To use a different path explicitly, set `CONFIG=/path/to/your.toml` (e.g. `CONFIG=wachtmeater.local.toml python -m pytest`). In the container/K8s the config instead comes from the generated Secret mounted at `/config/wachtmeater.toml`.
+
 | Variable | Description | Default |
 |---|---|---|
 | `MEATER_URL` | MEATER Cloud cook URL to monitor | — (**required**) |
@@ -134,6 +152,7 @@ Settings are loaded from a TOML config file (`wachtmeater.toml` or path in `$CON
 | `AMBIENT_TEMP_DROP_THRESHOLD` | Ambient temp drop (°C) to trigger fire-out alert | `10` |
 | `COOKEND_ERROR_THRESHOLD` | Consecutive fetch errors before declaring cook ended | `3` |
 | `COOKEND_PROBE_REMOVED_TEMP` | Internal temp (°C) below which probe counts as removed | `35.0` |
+| `STATION_OFFLINE_CALL_THRESHOLD` | Consecutive offline checks before the station-offline SIP call fires | `2` |
 | `MATRIX_HOMESERVER` | Matrix homeserver URL | `http://synapse.matrix.svc.cluster.local:8008` |
 | `MATRIX_USER` | Matrix bot user ID | — (**required**) |
 | `MATRIX_PASSWORD` | Matrix bot password | — (**required**) |
@@ -168,6 +187,7 @@ These set the initial values written into a fresh per-cook state file. Once the 
 | `ALERT_DEFAULT_AMBIENT_RANGE_MIN` | Min acceptable ambient temp (°C) | `0.0` |
 | `ALERT_DEFAULT_AMBIENT_RANGE_MAX` | Max acceptable ambient temp (°C) | `0.0` |
 | `ALERT_DEFAULT_COOKEND_ENABLED` | Cook-end auto-detection | `true` |
+| `ALERT_DEFAULT_STATION_OFFLINE_ENABLED` | Station-offline alert (SIP call on prolonged outage) | `true` |
 
 ## Installation
 

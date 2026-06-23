@@ -947,13 +947,6 @@ async def event_loop(
         except Exception as e:
             logger.error(f"Startup-Testanruf fehlgeschlagen: {e}")
 
-    # Initial MEATER check
-    logger.info("Erster MEATER-Check...")
-    result = await asyncio.to_thread(run_meater_check, state)
-    if result == "__cook_ended__":
-        logger.warning("Cook bereits beim ersten Check als beendet erkannt.")
-        return
-
     # --- Set up messaging backend ---
     if messaging is None:
         from wachtmeater.matrix_adapter import MatrixMessagingAdapter
@@ -1021,6 +1014,21 @@ async def event_loop(
             if image_path:
                 fut2 = asyncio.run_coroutine_threadsafe(messaging.send_image(rid, image_path), loop)
                 fut2.result(timeout=90)
+
+    # Initial MEATER check — now that Matrix is connected, post the current
+    # status (text + screenshot) through the same sender used for periodic
+    # checks, so the room sees the live cook state right after the greeting.
+    logger.info("Erster MEATER-Check...")
+    initial_result = await asyncio.to_thread(run_meater_check, state, _send_via_messaging)
+    if initial_result == "__cook_ended__":
+        logger.warning("Cook bereits beim ersten Check als beendet erkannt.")
+        for rid in room_ids if room_ids else messaging.get_rooms():
+            try:
+                await messaging.send_message(rid, "Cook-Ende erkannt. MEATER Watcher wird beendet.")
+            except Exception:
+                pass
+        await messaging.close()
+        return
 
     # Shared stop event
     stop_event = asyncio.Event()

@@ -906,3 +906,33 @@ class TestStartupGreeting:
         assert greeting_call[0][0] == "!room:test"
         assert "MEATER Watcher ist gestartet" in greeting_call[0][1]
         assert mw.HELP_TEXT in greeting_call[0][1]
+
+    def test_initial_check_runs_with_sender_after_connect(self) -> None:
+        """The initial check runs with the messaging sender so it posts status + screenshot."""
+
+        async def _stop_sync() -> None:
+            await asyncio.sleep(0.05)
+
+        mock_messaging = _make_mock_messaging(sync_side_effect=_stop_sync)
+
+        with (
+            patch.object(mw, "MEATER_URL", "https://meater.io/test-uuid"),
+            patch.object(mw, "load_state", return_value=WatcherState()),
+            patch.object(mw, "save_state"),
+            patch.object(mw, "call_pitmaster"),
+            patch.object(mw, "run_meater_check", return_value="ok") as mock_check,
+            patch.object(mw, "cfg") as mock_cfg,
+        ):
+            mock_cfg.matrix.room = "!room:test"
+            mock_cfg.matrix.auto_create_room_for_meater_uuid = False
+            mock_cfg.matrix.pitmaster = ""
+
+            asyncio.run(mw.event_loop(skip_startup_test_call=True, messaging=mock_messaging))
+
+        # The initial check must run AFTER connect, with the sender closure as
+        # its second argument (so status text + screenshot reach the room).
+        mock_messaging.connect.assert_awaited()
+        assert mock_check.call_count >= 1
+        first_call = mock_check.call_args_list[0]
+        assert len(first_call.args) == 2  # (state, send_callback)
+        assert callable(first_call.args[1])

@@ -303,7 +303,7 @@ def create_resources(
                             ],
                             resources=client.V1ResourceRequirements(
                                 requests={"cpu": "50m", "memory": "128Mi"},
-                                limits={"cpu": "200m", "memory": "256Mi"},
+                                limits={"cpu": "200m", "memory": "512Mi"},
                             ),
                         ),
                     ],

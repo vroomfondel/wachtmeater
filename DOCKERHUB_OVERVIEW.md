@@ -48,10 +48,10 @@ Long cooks (10-16 h) mean you sleep while the meat is on — and miss it when th
 - Periodically scrapes a MEATER Cloud cook URL via a remote Chrome browser (CDP)
 - Posts temperature status (internal, ambient, target) to E2E-encrypted Matrix rooms
 - Auto-creates a dedicated Matrix room per cook UUID; can simultaneously broadcast to a fixed operator room (room ID *or* `#alias:srv`)
-- Listens for Matrix commands to enable/disable alerts (tempdown, stall, wrap, ruhephase, ambient range, cookend) and for `testcall [<text>]` to dial the pitmaster on demand
+- Listens for Matrix commands to enable/disable alerts (tempdown, stall, wrap, ruhephase, ambient range, cookend, station-offline), override the per-cook check interval, and for `testcall [<text>]` to dial the pitmaster on demand
 - Cook-end detection via 4 mechanisms: consecutive fetch errors, probe removed, target reached, MEATER Cloud "finished" state
 - Triggers SIP phone calls via sipstuff-operator when alerts fire
-- Ships an in-cluster **operator** mode (`wachtmeater-operator`) that spawns/destroys/lists per-cook watcher Jobs from Matrix `operator new <url>` / `operator delete <spec>` / `operator list` commands — only the configured pitmaster MXID may issue them
+- Ships an in-cluster **operator** mode (`wachtmeater-operator`) that spawns/destroys/lists/resumes per-cook watcher Jobs from Matrix `operator new <url>` / `operator delete <spec>` / `operator list` / `operator resume <spec>` commands — only the configured pitmaster MXID may issue them
 - Persists state per cook UUID for resumable monitoring
 - TOML config support (`wachtmeater.toml` / `wachtmeater.local.toml`) alongside env vars / `.env`
 
@@ -96,6 +96,7 @@ In the listening room, the pitmaster MXID can then send `operator new https://co
 | `CHECK_INTERVAL` | Seconds between checks (default: 600) |
 | `COOKEND_ERROR_THRESHOLD` | Consecutive fetch errors before cook-end (default: 3) |
 | `COOKEND_PROBE_REMOVED_TEMP` | Internal temp (°C) below which probe counts as removed (default: 35.0) |
+| `STATION_OFFLINE_CALL_THRESHOLD` | Consecutive offline checks before the station-offline SIP call fires (default: 2) |
 | `MATRIX_AUTO_CREATE_ROOM` | Auto-create E2E-encrypted Matrix room per cook (default: false) |
 | `MATRIX_PITMASTER` | MXID allowed to issue `operator …` commands |
 | `MATRIX_OPERATOR_LISTENING_ROOM` | Room ID/alias the operator listens in |
