@@ -38,11 +38,10 @@ dependencies = [
     'minimatrix>=0.0.1',
     'loguru>=0.7.3',
     'PyYAML>=6.0',
-    'requests>=2.31.0',
-    'playwright>=1.40.0',
-    'kubernetes>=28.0.0',
+    'requests>=2.34.2',
+    'playwright>=1.60.0',
+    'kubernetes>=36.0.2',
     'matrix-nio[e2e]>=0.25.0',
-    'Jinja2>=3.1.0',
     'websockets'
 ]
 

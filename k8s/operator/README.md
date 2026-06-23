@@ -8,18 +8,21 @@ spawns/destroys/lists per-cook watcher Jobs in the `meater` namespace.
 
 | File | Purpose |
 |---|---|
+| `namespace.yaml` | The `meater` namespace. Created at deploy time so the operator only needs `get` (not `create`) on namespaces. |
 | `serviceaccount.yaml` | Dedicated `ServiceAccount` for the operator pod. |
 | `role.yaml` | Namespaced `Role` with create/list/delete on `jobs` and `secrets`. |
 | `rolebinding.yaml` | Binds the Role to the ServiceAccount. |
+| `clusterrole.yaml` | `ClusterRole` granting `get` on `namespaces` (cluster-scoped, so it cannot live in the namespaced Role). |
+| `clusterrolebinding.yaml` | Binds the ClusterRole to the ServiceAccount. |
 | `deployment.yaml` | `Deployment` with `replicas: 1`, `strategy: Recreate` (only one Matrix session at a time). |
 | `configmap.example.yaml` | Example `wachtmeater.local.toml` ConfigMap — copy and fill in real values before applying. |
 
 ## Setup
 
-1. Create the namespace if it does not exist:
+1. Create the namespace (needed before the ConfigMap below):
 
    ```bash
-   kubectl create namespace meater
+   kubectl apply -f namespace.yaml
    ```
 
 2. Create the operator's config ConfigMap.  Easiest is to keep your
@@ -46,6 +49,8 @@ spawns/destroys/lists per-cook watcher Jobs in the `meater` namespace.
    kubectl apply -f serviceaccount.yaml
    kubectl apply -f role.yaml
    kubectl apply -f rolebinding.yaml
+   kubectl apply -f clusterrole.yaml
+   kubectl apply -f clusterrolebinding.yaml
    kubectl apply -f deployment.yaml
    ```
 
