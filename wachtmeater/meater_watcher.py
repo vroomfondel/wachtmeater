@@ -26,6 +26,9 @@ Supported Matrix commands (case-insensitive):
     - ``enable offline``            — Enable station-offline alert (SIP on
       prolonged outage).
     - ``disable offline``           — Disable station-offline alert.
+    - ``enable startcall``          — Enable the startup test call (applied
+      on the next watcher start).
+    - ``disable startcall``         — Disable the startup test call.
     - ``hilfe`` / ``help``          — Show available commands.
     - ``stop`` / ``quit`` / ``beenden`` — Shut down the watcher loop.
 
@@ -34,11 +37,12 @@ All alert settings are persisted per MEATER UUID in the JSON state file.
 
 import asyncio
 import json
+import os
 import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from loguru import logger
 
@@ -66,6 +70,7 @@ class MeaterData(TypedDict, total=False):
     started_at: str | None
     peak_temp_c: int | None
     error: str
+    error_kind: Literal["transient", "cook_gone"]
 
 
 class WatcherError(Exception):
@@ -165,9 +170,12 @@ def get_meater_data() -> MeaterData:
         Flat dictionary with cook fields on success, or a dictionary
         with an ``"error"`` key describing the failure.
     """
-    try:
-        from wachtmeater.meater_monitor import extract_via_browser
+    from wachtmeater.meater_monitor import (
+        CookNotFoundError,
+        extract_via_browser,
+    )
 
+    try:
         cook = extract_via_browser(MEATER_URL)
         data: MeaterData = {
             "internal_temp_c": cook.internal_temp_c,
@@ -182,8 +190,14 @@ def get_meater_data() -> MeaterData:
             "peak_temp_c": cook.peak_temp_c,
         }
         return data
+    except CookNotFoundError as e:
+        # The cook URL / cook ID is genuinely gone — legitimate cook-end signal.
+        return {"error": str(e), "error_kind": "cook_gone"}
     except Exception as e:
-        return {"error": str(e)}
+        # CdpUnavailableError and any other unexpected failure are treated as
+        # transient, our-side problems.  They must NOT be mistaken for cook-end:
+        # a CDP timeout previously caused the cook to be falsely declared done.
+        return {"error": str(e), "error_kind": "transient"}
 
 
 def call_pitmaster(message: str) -> bool:
@@ -277,6 +291,12 @@ def _alert_summary(state: WatcherState) -> list[str]:
     else:
         lines.append("Station-Offline-Alert: AUS")
 
+    # Startup test call (applies to the next watcher start)
+    if state.startup_test_call_enabled:
+        lines.append("Startup-Testanruf: AN")
+    else:
+        lines.append("Startup-Testanruf: AUS")
+
     return lines
 
 
@@ -317,6 +337,15 @@ def run_meater_check(
         msg = f"Fehler beim Abrufen der MEATER-Daten: {data['error']}"
         logger.warning(msg)
 
+        # Only a genuine "cook URL / cook ID no longer exists" error counts
+        # toward cook-end.  Transient our-side failures (CDP unreachable,
+        # connect/navigation timeouts) must NOT — a CDP timeout previously
+        # got mistaken for cook-end and falsely declared the cook done.
+        error_kind = data.get("error_kind", "transient")
+        if error_kind != "cook_gone":
+            logger.warning("Transienter Abruf-Fehler (CDP/Timeout) — zaehlt NICHT als Cook-Ende.")
+            return msg
+
         if state.tempalert_cookend_enabled:
             errs = state.consecutive_errors + 1
             state.consecutive_errors = errs
@@ -324,8 +353,8 @@ def run_meater_check(
             if errs >= COOKEND_ERROR_THRESHOLD:
                 end_msg = (
                     f"Cook-Ende erkannt: {errs} aufeinanderfolgende Fehler beim "
-                    f"Abrufen der MEATER-Daten. Der Cook wurde vermutlich beendet "
-                    f"oder die URL ist nicht mehr erreichbar."
+                    f"Abrufen der MEATER-Daten. Die Cook-URL ist nicht mehr "
+                    f"erreichbar (Cook wurde geloescht oder ist abgelaufen)."
                 )
                 logger.warning(end_msg)
                 if send is not None:
@@ -333,7 +362,7 @@ def run_meater_check(
                         send(end_msg, None)
                     except Exception:
                         pass
-                call_pitmaster("MEATER Cook scheint beendet zu sein. " "Mehrere Abrufversuche sind fehlgeschlagen.")
+                call_pitmaster("MEATER Cook scheint beendet zu sein. " "Die Cook-URL existiert nicht mehr.")
                 state.cook_ended = True
                 save_state(state)
                 return "__cook_ended__"
@@ -629,6 +658,8 @@ disable offline           - Station-Offline-Alert AUS
 reset stall               - Stall-Alert zuruecksetzen
 reset wrap                - Wrap-Alert zuruecksetzen
 testcall [<text>]         - Testanruf bei Pitmaster mit beliebigem Text
+enable startcall          - Startup-Testanruf beim Start AN
+disable startcall         - Startup-Testanruf beim Start AUS
 hilfe / help              - Diese Hilfe anzeigen
 stop / quit / beenden     - Watcher beenden\
 """
@@ -795,6 +826,31 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         save_state(state)
         return "Station-Offline-Alert deaktiviert."
 
+    # --- enable/disable startup test call ---
+    if text in (
+        "enable startcall",
+        "startcall an",
+        "startcall on",
+        "startcall enable",
+        "enable startup-testcall",
+        "enable startup_testcall",
+    ):
+        state.startup_test_call_enabled = True
+        save_state(state)
+        return "Startup-Testanruf aktiviert (gilt ab dem naechsten Start)."
+
+    if text in (
+        "disable startcall",
+        "startcall aus",
+        "startcall off",
+        "startcall disable",
+        "disable startup-testcall",
+        "disable startup_testcall",
+    ):
+        state.startup_test_call_enabled = False
+        save_state(state)
+        return "Startup-Testanruf deaktiviert (gilt ab dem naechsten Start)."
+
     # --- stop ---
     if text in ("stop", "quit", "beenden", "exit"):
         return "__stop__"
@@ -825,8 +881,24 @@ async def event_loop(
 
     state = load_state()
 
-    # Startup test call
-    if not skip_startup_test_call:
+    # Resume: the operator recreated this job to revive a cook that was
+    # (falsely) marked as ended.  Clear the cook-end flag and switch off
+    # auto cook-end detection so the very same condition (e.g. internal >=
+    # target, "finished" page, probe removed) does not immediately end the
+    # cook again on the initial check.  The user can re-enable detection
+    # with ``enable cookend`` once the cook has genuinely moved on.
+    if os.environ.get("WACHTMEATER_RESUME") == "1":
+        logger.warning("Resume angefordert: cook_ended zurueckgesetzt, " "Cook-Ende-Erkennung deaktiviert.")
+        state.cook_ended = False
+        state.tempalert_cookend_enabled = False
+        state.consecutive_errors = 0
+        state.offline_streak = 0
+        state.station_offline_call_sent = False
+        save_state(state)
+
+    # Startup test call — suppressed by the CLI flag or the persisted
+    # per-cook setting (toggled via the ``enable/disable startcall`` command).
+    if not skip_startup_test_call and state.startup_test_call_enabled:
         logger.info("Startup-Testanruf...")
         try:
             await asyncio.to_thread(call_pitmaster, "Meater Watcher gestartet. Dies ist ein Testanruf.")
@@ -871,10 +943,15 @@ async def event_loop(
         f"(broadcast={selection.broadcast}, cook={selection.cook})"
     )
 
-    # Send startup greeting with available commands
+    # Send startup greeting with available commands.  If the job created
+    # its own per-cook room, only greet there — repeating the command list
+    # in the main broadcast room would be redundant.
     startup_msg = f"Hallo! MEATER Watcher ist gestartet.\n\n{HELP_TEXT}"
-    target_rooms = room_ids if room_ids else messaging.get_rooms()
-    for rid in target_rooms:
+    if selection.cook:
+        greeting_rooms = [selection.cook]
+    else:
+        greeting_rooms = room_ids if room_ids else messaging.get_rooms()
+    for rid in greeting_rooms:
         try:
             await messaging.send_message(rid, startup_msg)
         except Exception as e:

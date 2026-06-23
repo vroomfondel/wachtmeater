@@ -86,6 +86,16 @@ class TestAlertSummary:
         lines = mw._alert_summary(base_state)
         assert any("Ambient-Bereich: AN" in l and "100" in l and "130" in l for l in lines)
 
+    def test_startup_test_call_enabled(self, base_state: WatcherState) -> None:
+        base_state.startup_test_call_enabled = True
+        lines = mw._alert_summary(base_state)
+        assert any("Startup-Testanruf: AN" in l for l in lines)
+
+    def test_startup_test_call_disabled(self, base_state: WatcherState) -> None:
+        base_state.startup_test_call_enabled = False
+        lines = mw._alert_summary(base_state)
+        assert any("Startup-Testanruf: AUS" in l for l in lines)
+
 
 # ============================================================================
 # handle_command
@@ -146,6 +156,33 @@ class TestHandleCommand:
     @patch.object(mw, "save_state")
     def test_exit(self, _save: MagicMock, base_state: WatcherState) -> None:
         assert mw.handle_command("exit", base_state) == "__stop__"
+
+    @patch.object(mw, "save_state")
+    def test_disable_startcall(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.startup_test_call_enabled = True
+        result = mw.handle_command("disable startcall", base_state)
+        assert base_state.startup_test_call_enabled is False
+        assert result is not None and "deaktiviert" in result
+
+    @patch.object(mw, "save_state")
+    def test_enable_startcall(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.startup_test_call_enabled = False
+        result = mw.handle_command("enable startcall", base_state)
+        assert base_state.startup_test_call_enabled is True
+        assert result is not None and "aktiviert" in result
+
+    @patch.object(mw, "save_state")
+    def test_startcall_german_alias(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.startup_test_call_enabled = True
+        assert mw.handle_command("startcall aus", base_state) is not None
+        assert base_state.startup_test_call_enabled is False
+
+    @patch.object(mw, "save_state")
+    def test_startcall_does_not_shadow_manual_testcall(self, _save: MagicMock, base_state: WatcherState) -> None:
+        # The manual "testcall" command must still trigger a call, not be
+        # confused with the startup-testcall toggle.
+        result = mw.handle_command("testcall", base_state)
+        assert result == "__testcall__\nWachtmeater Testanruf"
 
     @patch.object(mw, "save_state")
     def test_enable_tempdown(self, _save: MagicMock, base_state: WatcherState) -> None:
@@ -480,12 +517,17 @@ class TestRunMeaterCheck:
         base.update(overrides)
         return base
 
-    def test_error_cookend_threshold(self, base_state: WatcherState) -> None:
+    def test_cook_gone_error_reaches_cookend_threshold(self, base_state: WatcherState) -> None:
+        # A genuine "cook URL no longer exists" error counts toward cook-end.
         base_state.tempalert_cookend_enabled = True
         base_state.consecutive_errors = 2  # one more → threshold (3)
         mock_send = MagicMock()
         with (
-            patch.object(mw, "get_meater_data", return_value={"error": "timeout"}),
+            patch.object(
+                mw,
+                "get_meater_data",
+                return_value={"error": "HTTP 404", "error_kind": "cook_gone"},
+            ),
             patch.object(mw, "call_pitmaster") as mock_call,
             patch.object(mw, "save_state"),
         ):
@@ -494,6 +536,43 @@ class TestRunMeaterCheck:
         assert base_state.cook_ended is True
         mock_call.assert_called_once()
         mock_send.assert_called_once()
+
+    def test_transient_error_never_ends_cook(self, base_state: WatcherState) -> None:
+        # A CDP/timeout (our-side) error must NOT be mistaken for cook-end,
+        # even when already at the error threshold.
+        base_state.tempalert_cookend_enabled = True
+        base_state.consecutive_errors = 2  # already one below threshold (3)
+        mock_send = MagicMock()
+        with (
+            patch.object(
+                mw,
+                "get_meater_data",
+                return_value={"error": "CDP connect failed", "error_kind": "transient"},
+            ),
+            patch.object(mw, "call_pitmaster") as mock_call,
+            patch.object(mw, "save_state"),
+        ):
+            result = mw.run_meater_check(base_state, send=mock_send)
+        assert result != "__cook_ended__"
+        assert base_state.cook_ended is False
+        # Transient errors are neutral: they neither escalate nor bump the counter.
+        assert base_state.consecutive_errors == 2
+        mock_call.assert_not_called()
+
+    def test_error_without_kind_defaults_to_transient(self, base_state: WatcherState) -> None:
+        # Backwards-compat: an error dict with no error_kind is treated as
+        # transient (safe default) and never ends the cook.
+        base_state.tempalert_cookend_enabled = True
+        base_state.consecutive_errors = 2
+        with (
+            patch.object(mw, "get_meater_data", return_value={"error": "boom"}),
+            patch.object(mw, "call_pitmaster") as mock_call,
+            patch.object(mw, "save_state"),
+        ):
+            result = mw.run_meater_check(base_state)
+        assert result != "__cook_ended__"
+        assert base_state.cook_ended is False
+        mock_call.assert_not_called()
 
     def test_normal_path_updates_max(self, base_state: WatcherState) -> None:
         data = self._make_data()

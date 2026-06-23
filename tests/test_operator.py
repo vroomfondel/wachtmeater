@@ -95,6 +95,17 @@ class TestCommandParsing:
         result = op.handle_operator_command("operator delete abc-123", PITMASTER, state)
         assert result == "__op_delete__\nabc-123"
 
+    def test_resume_returns_sentinel(self, state: OperatorState) -> None:
+        result = op.handle_operator_command("operator resume abc-123", PITMASTER, state)
+        assert result == "__op_resume__\nabc-123"
+
+    def test_resume_case_insensitive_keyword(self, state: OperatorState) -> None:
+        result = op.handle_operator_command("OPERATOR RESUME 2", PITMASTER, state)
+        assert result == "__op_resume__\n2"
+
+    def test_resume_listed_in_help(self, state: OperatorState) -> None:
+        assert "operator resume" in op.HELP_TEXT
+
     def test_list_returns_sentinel(self, state: OperatorState) -> None:
         assert op.handle_operator_command("operator list", PITMASTER, state) == "__op_list__"
 

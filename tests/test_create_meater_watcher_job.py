@@ -3,6 +3,7 @@
 Requires kubernetes (imported at module level by create_meater_watcher_job).
 """
 
+from typing import Any
 from unittest.mock import MagicMock, call
 
 import pytest
@@ -95,6 +96,29 @@ class TestBuildConfigContent:
         for key in required:
             assert key in content, f"Missing key: {key}"
 
+    def test_is_valid_toml(self) -> None:
+        import tomllib
+
+        content = k8s_mod.build_config_content(self.URL)
+        # Must parse without error — guards the hand-rolled TOML serializer.
+        tomllib.loads(content)
+
+    def test_all_config_fields_written_explicitly(self) -> None:
+        # Every section and every field of the live config must appear in the
+        # generated file — including those left at their defaults. Nothing is
+        # omitted/hidden, so spawned watchers inherit the full configuration.
+        import tomllib
+        from dataclasses import asdict, fields
+
+        from wachtmeater import cfg
+
+        parsed = tomllib.loads(k8s_mod.build_config_content(self.URL))
+        for section_field in fields(cfg):
+            section = section_field.name
+            assert section in parsed, f"Missing section: [{section}]"
+            for key in asdict(getattr(cfg, section)):
+                assert key in parsed[section], f"Missing field: {section}.{key}"
+
     def test_different_urls_different_state_files(self) -> None:
         c1 = k8s_mod.build_config_content("https://cooks.cloud.meater.com/cook/uuid-one")
         c2 = k8s_mod.build_config_content("https://cooks.cloud.meater.com/cook/uuid-two")
@@ -137,3 +161,42 @@ class TestApplyResource:
         with pytest.raises(ApiException):
             k8s_mod.apply_resource(create, replace, "test/resource")
         replace.assert_not_called()
+
+
+# ============================================================================
+# create_resources — resume flag wiring
+# ============================================================================
+
+
+class TestCreateResourcesResume:
+    """The ``resume`` flag controls the WACHTMEATER_RESUME container env var."""
+
+    URL = "https://cooks.cloud.meater.com/cook/abc-123-def"
+
+    def _build_job(self, monkeypatch: pytest.MonkeyPatch, *, resume: bool) -> Any:
+        """Run create_resources with k8s fully mocked; return the created Job."""
+        monkeypatch.setattr(k8s_mod, "_load_kube_config", lambda: None)
+        batch = MagicMock()
+        monkeypatch.setattr(k8s_mod.client, "CoreV1Api", lambda: MagicMock())
+        monkeypatch.setattr(k8s_mod.client, "BatchV1Api", lambda: batch)
+        k8s_mod.create_resources(self.URL, resume=resume)
+        # create_namespaced_job(NAMESPACE, job) — the Job is the last positional arg.
+        return batch.create_namespaced_job.call_args.args[-1]
+
+    @staticmethod
+    def _env_names(job: Any) -> list[str]:
+        env = job.spec.template.spec.containers[0].env
+        return [e.name for e in env]
+
+    def test_resume_sets_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        job = self._build_job(monkeypatch, resume=True)
+        env = job.spec.template.spec.containers[0].env
+        resume_vars = [e for e in env if e.name == "WACHTMEATER_RESUME"]
+        assert len(resume_vars) == 1
+        assert resume_vars[0].value == "1"
+        assert "CONFIG" in self._env_names(job)
+
+    def test_default_no_resume_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        job = self._build_job(monkeypatch, resume=False)
+        assert "WACHTMEATER_RESUME" not in self._env_names(job)
+        assert "CONFIG" in self._env_names(job)
