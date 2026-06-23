@@ -96,6 +96,16 @@ class TestAlertSummary:
         lines = mw._alert_summary(base_state)
         assert any("Startup-Testanruf: AUS" in l for l in lines)
 
+    def test_check_interval_default(self, base_state: WatcherState) -> None:
+        base_state.check_interval_override = None
+        lines = mw._alert_summary(base_state)
+        assert any(l == f"Check-Intervall: {mw.CHECK_INTERVAL}s" for l in lines)
+
+    def test_check_interval_override(self, base_state: WatcherState) -> None:
+        base_state.check_interval_override = 45
+        lines = mw._alert_summary(base_state)
+        assert any("Check-Intervall: 45s (override" in l for l in lines)
+
 
 # ============================================================================
 # handle_command
@@ -156,6 +166,35 @@ class TestHandleCommand:
     @patch.object(mw, "save_state")
     def test_exit(self, _save: MagicMock, base_state: WatcherState) -> None:
         assert mw.handle_command("exit", base_state) == "__stop__"
+
+    @patch.object(mw, "save_state")
+    def test_set_interval(self, _save: MagicMock, base_state: WatcherState) -> None:
+        result = mw.handle_command("set interval 120", base_state)
+        assert base_state.check_interval_override == 120
+        assert result is not None and "gesetzt" in result
+
+    @patch.object(mw, "save_state")
+    def test_set_interval_bare_keyword(self, _save: MagicMock, base_state: WatcherState) -> None:
+        assert mw.handle_command("interval 300", base_state) is not None
+        assert base_state.check_interval_override == 300
+
+    @patch.object(mw, "save_state")
+    def test_set_interval_below_minimum_rejected(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.check_interval_override = 120
+        result = mw.handle_command(f"set interval {mw.MIN_CHECK_INTERVAL - 1}", base_state)
+        assert result is not None and "mindestens" in result
+        assert base_state.check_interval_override == 120  # unchanged
+
+    @patch.object(mw, "save_state")
+    def test_reset_interval(self, _save: MagicMock, base_state: WatcherState) -> None:
+        mw.handle_command("set interval 99", base_state)  # establish an override first
+        result = mw.handle_command("reset interval", base_state)
+        assert result is not None and "Standard" in result
+        assert base_state.check_interval_override is None
+
+    @patch.object(mw, "save_state")
+    def test_set_interval_non_numeric_is_not_a_command(self, _save: MagicMock, base_state: WatcherState) -> None:
+        assert mw.handle_command("set interval abc", base_state) is None
 
     @patch.object(mw, "save_state")
     def test_disable_startcall(self, _save: MagicMock, base_state: WatcherState) -> None:

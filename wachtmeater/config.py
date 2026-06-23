@@ -496,6 +496,8 @@ class WatcherState:
     station_offline_call_sent: bool = False
     # Startup behaviour
     startup_test_call_enabled: bool = True
+    # Per-cook check-interval override in seconds (None = use config default)
+    check_interval_override: int | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "WatcherState":

@@ -26,6 +26,9 @@ Supported Matrix commands (case-insensitive):
     - ``enable offline``            — Enable station-offline alert (SIP on
       prolonged outage).
     - ``disable offline``           — Disable station-offline alert.
+    - ``set interval <secs>``       — Override the periodic check interval
+      (seconds); applies from the next cycle and persists per cook.
+    - ``reset interval``            — Restore the config-default interval.
     - ``enable startcall``          — Enable the startup test call (applied
       on the next watcher start).
     - ``disable startcall``         — Disable the startup test call.
@@ -90,6 +93,8 @@ STATE_FILE: Path = STATE_FILE_DIR / (cfg.meater.state_file_name or f"meater-stat
 
 AMBIENT_TEMP_DROP_THRESHOLD: int = cfg.monitoring.ambient_temp_drop_threshold
 CHECK_INTERVAL: int = cfg.monitoring.check_interval
+MIN_CHECK_INTERVAL: int = 30
+"""Lower bound for the ``set interval`` command, to avoid hammering the cook page."""
 
 # Stall detection defaults
 STALL_WINDOW: int = cfg.monitoring.stall_window
@@ -156,6 +161,19 @@ def save_state(state: WatcherState) -> None:
     state.last_check = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(STATE_FILE, "w") as f:
         json.dump(state.to_dict(), f, indent=2)
+
+
+def effective_check_interval(state: WatcherState) -> int:
+    """Return the active check interval in seconds.
+
+    Args:
+        state: Current watcher state.
+
+    Returns:
+        The per-cook ``check_interval_override`` when set, otherwise the
+        config-driven default ``CHECK_INTERVAL``.
+    """
+    return state.check_interval_override or CHECK_INTERVAL
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +309,13 @@ def _alert_summary(state: WatcherState) -> list[str]:
     else:
         lines.append("Station-Offline-Alert: AUS")
 
+    # Check interval
+    interval = effective_check_interval(state)
+    if state.check_interval_override is not None:
+        lines.append(f"Check-Intervall: {interval}s (override; Standard {CHECK_INTERVAL}s)")
+    else:
+        lines.append(f"Check-Intervall: {interval}s")
+
     # Startup test call (applies to the next watcher start)
     if state.startup_test_call_enabled:
         lines.append("Startup-Testanruf: AN")
@@ -376,7 +401,7 @@ def run_meater_check(
 
         last_internal = state.last_internal_temp
         last_ambient = state.last_ambient_temp
-        offline_minutes = state.offline_streak * (CHECK_INTERVAL // 60)
+        offline_minutes = state.offline_streak * (effective_check_interval(state) // 60)
 
         lines = [f"⚠ MEATER Station offline (Cycle {state.offline_streak}, ~{offline_minutes} Min.)"]
         if last_internal is not None:
@@ -658,6 +683,8 @@ disable offline           - Station-Offline-Alert AUS
 reset stall               - Stall-Alert zuruecksetzen
 reset wrap                - Wrap-Alert zuruecksetzen
 testcall [<text>]         - Testanruf bei Pitmaster mit beliebigem Text
+set interval <sek>        - Check-Intervall in Sekunden setzen
+reset interval            - Check-Intervall auf Standard zuruecksetzen
 enable startcall          - Startup-Testanruf beim Start AN
 disable startcall         - Startup-Testanruf beim Start AUS
 hilfe / help              - Diese Hilfe anzeigen
@@ -825,6 +852,21 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         state.tempalert_station_offline_enabled = False
         save_state(state)
         return "Station-Offline-Alert deaktiviert."
+
+    # --- set / reset check interval ---
+    if text in ("reset interval", "reset intervall", "set interval default", "set intervall default"):
+        state.check_interval_override = None
+        save_state(state)
+        return f"Check-Intervall auf Standard zurueckgesetzt ({CHECK_INTERVAL}s)."
+
+    m = re.match(r"(?:set\s+)?intervall?\s+(\d+)\s*$", text)
+    if m:
+        secs = int(m.group(1))
+        if secs < MIN_CHECK_INTERVAL:
+            return f"Fehler: Intervall muss mindestens {MIN_CHECK_INTERVAL}s sein."
+        state.check_interval_override = secs
+        save_state(state)
+        return f"Check-Intervall auf {secs}s gesetzt (gilt ab dem naechsten Zyklus)."
 
     # --- enable/disable startup test call ---
     if text in (
@@ -1045,11 +1087,12 @@ async def event_loop(
     async def periodic_check() -> None:
         """Run MEATER checks at regular intervals until stopped."""
         while not stop_event.is_set():
+            interval = effective_check_interval(state)
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=CHECK_INTERVAL)
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
                 break
             except asyncio.TimeoutError:
-                logger.info(f"Periodischer Check (alle {CHECK_INTERVAL}s)...")
+                logger.info(f"Periodischer Check (alle {interval}s)...")
                 check_result = await asyncio.to_thread(run_meater_check, state, _send_via_messaging)
                 if check_result == "__cook_ended__":
                     logger.warning("Cook-Ende erkannt im periodischen Check. Beende...")
