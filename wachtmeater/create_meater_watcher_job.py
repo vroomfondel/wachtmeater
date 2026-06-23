@@ -26,12 +26,13 @@ Examples:
         $ wachtmeater deploy --delete --meater-url https://cooks.cloud.meater.com/cook/abc123
 """
 
+import json
 import os
 import time
 from collections.abc import Callable
-from pathlib import Path
+from dataclasses import asdict, fields
+from typing import Any
 
-from jinja2 import Template
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from loguru import logger
@@ -71,11 +72,32 @@ def _short_uuid(meater_url: str) -> str:
     return uuid.replace("-", "")[:8].lower()
 
 
+def _toml_value(value: Any) -> str:
+    """Render a Python scalar/list as a TOML literal.
+
+    The config schema only uses ``str``/``int``/``float``/``bool``/``list[str]``
+    values, all of which share TOML's literal syntax with JSON
+    (``true``/``false``, bare numbers, double-quoted strings, ``[...]``
+    arrays).  ``json.dumps`` therefore produces valid TOML for every value.
+
+    Args:
+        value: The Python value to serialize.
+
+    Returns:
+        A TOML-literal string representation of *value*.
+    """
+    return json.dumps(value)
+
+
 def build_config_content(meater_url: str) -> str:
     """Build the ``wachtmeater.toml`` config for the K8s meater-watcher container.
 
-    Generates a TOML configuration with sections for CDP browser access, MEATER
-    cook monitoring, and SIP call alerting.
+    The config is generated directly from the live ``cfg`` object, emitting
+    **every** section and **every** field — including those left at their
+    defaults — so the spawned watcher inherits the operator's full, explicit
+    configuration with nothing hidden or omitted.  Only the ``[meater]``
+    section is overridden with container-specific values (the cook URL and
+    a per-cook state-file path).
 
     Args:
         meater_url: The MEATER Cloud cook URL to monitor.
@@ -85,18 +107,31 @@ def build_config_content(meater_url: str) -> str:
     """
     meater_uuid: str = meater_url.split("/")[-1]
 
-    template_path = Path(__file__).resolve().parent / "templates" / "wachtmeater.toml.j2"
-    template = Template(template_path.read_text())
-    return template.render(
-        meater_url=meater_url,
-        meater_uuid=meater_uuid,
-        browser=cfg.browser,
-        sip=cfg.sip,
-        monitoring=cfg.monitoring,
-        matrix=cfg.matrix,
-        auth=cfg.auth,
-        alerts=cfg.alerts,
-    )
+    # Container-specific overrides for the [meater] section.
+    overrides: dict[str, dict[str, Any]] = {
+        "meater": {
+            "url": meater_url,
+            "state_file_dir": "/data",
+            "state_file_name": f"meater-state-{meater_uuid}.json",
+        }
+    }
+
+    lines: list[str] = []
+    # Iterate the root config in declaration order so each section dataclass
+    # contributes all of its fields verbatim — no hand-maintained template to
+    # drift out of sync with the config schema.
+    for section_field in fields(cfg):
+        section_name = section_field.name
+        section_obj = getattr(cfg, section_name)
+        section_data: dict[str, Any] = asdict(section_obj)
+        section_data.update(overrides.get(section_name, {}))
+
+        lines.append(f"[{section_name}]")
+        for key, value in section_data.items():
+            lines.append(f"{key} = {_toml_value(value)}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def apply_resource(
@@ -126,7 +161,11 @@ def apply_resource(
             raise
 
 
-def create_resources(meater_url: str, hostpath: str = "/mnt/nfs/meaterwatcher_shared") -> None:
+def create_resources(
+    meater_url: str,
+    hostpath: str = "/mnt/nfs/meaterwatcher_shared",
+    resume: bool = False,
+) -> None:
     """Create all Kubernetes resources for the MEATER watcher stack.
 
     Creates (or replaces) the namespace, ConfigMap, Secret, and Job
@@ -139,6 +178,9 @@ def create_resources(meater_url: str, hostpath: str = "/mnt/nfs/meaterwatcher_sh
         meater_url: The MEATER Cloud cook URL to embed in the ``.env`` Secret.
         hostpath: Host filesystem path mounted into the container for
             persistent data storage (default ``/mnt/nfs/meaterwatcher_shared``).
+        resume: When ``True``, set ``WACHTMEATER_RESUME=1`` in the container so
+            the watcher clears a (falsely) persisted cook-end flag on startup
+            and resumes monitoring instead of exiting immediately.
 
     Raises:
         SystemExit: If any of the required script files are missing on disk.
@@ -148,16 +190,30 @@ def create_resources(meater_url: str, hostpath: str = "/mnt/nfs/meaterwatcher_sh
     v1 = client.CoreV1Api()
     batch_v1 = client.BatchV1Api()
 
-    # 1. Namespace
-    ns = client.V1Namespace(metadata=client.V1ObjectMeta(name=NAMESPACE))
+    # 1. Namespace — check first, only create if it is not already present.
+    # If the namespace already exists, attempting to create it would only risk
+    # an unnecessary RBAC denial, so we look it up first and create only on a
+    # 404. After a create attempt we re-verify existence and raise if the
+    # namespace is genuinely absent.
     try:
-        v1.create_namespace(body=ns)
-        logger.info(f"Created namespace/{NAMESPACE}")
+        v1.read_namespace(name=NAMESPACE)
+        logger.debug(f"namespace/{NAMESPACE} already present")
     except ApiException as e:
-        if e.status == 409:
-            logger.debug(f"namespace/{NAMESPACE} already exists")
-        else:
+        if e.status != 404:
             raise
+        logger.debug(f"namespace/{NAMESPACE} not found; creating")
+        ns = client.V1Namespace(metadata=client.V1ObjectMeta(name=NAMESPACE))
+        try:
+            v1.create_namespace(body=ns)
+            logger.info(f"Created namespace/{NAMESPACE}")
+        except ApiException as create_err:
+            logger.debug(f"Could not create namespace/{NAMESPACE} ({create_err.status} {create_err.reason})")
+
+        try:
+            v1.read_namespace(name=NAMESPACE)
+            logger.debug(f"namespace/{NAMESPACE} present")
+        except ApiException as verify_err:
+            raise RuntimeError(f"namespace/{NAMESPACE} does not exist and could not be created") from verify_err
 
     # 2. ConfigMap with script files
     # cm_data = {}
@@ -205,6 +261,17 @@ def create_resources(meater_url: str, hostpath: str = "/mnt/nfs/meaterwatcher_sh
     )
 
     # 4. Job
+    container_env = [
+        client.V1EnvVar(
+            name="CONFIG",
+            value="/config/wachtmeater.toml",
+        ),
+    ]
+    if resume:
+        # Revive a (falsely) ended cook: the watcher clears its persisted
+        # cook-end flag on startup and keeps monitoring.
+        container_env.append(client.V1EnvVar(name="WACHTMEATER_RESUME", value="1"))
+
     job = client.V1Job(
         metadata=client.V1ObjectMeta(
             name=job_name,
@@ -222,12 +289,7 @@ def create_resources(meater_url: str, hostpath: str = "/mnt/nfs/meaterwatcher_sh
                             image=cfg.k8s.image,
                             # security_context=client.V1SecurityContext(run_as_user=0),
                             command=cfg.k8s.job_command,
-                            env=[
-                                client.V1EnvVar(
-                                    name="CONFIG",
-                                    value="/config/wachtmeater.toml",
-                                ),
-                            ],
+                            env=container_env,
                             volume_mounts=[
                                 client.V1VolumeMount(
                                     name="config",

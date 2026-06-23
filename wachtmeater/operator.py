@@ -8,6 +8,9 @@ spawns/destroys/lists ``meater-watcher-*`` Kubernetes Jobs in the
 Recognised commands:
 
 * ``operator new <MEATER_URL>``     — start a watcher job for *URL*.
+* ``operator resume <spec>``        — recreate a watcher whose cook was
+  (falsely) marked ended; *spec* is resolved like ``operator delete``.
+  The revived watcher starts with cook-end detection switched off.
 * ``operator delete <spec>``        — delete a watcher; *spec* may be a
   full MEATER URL, a cook UUID, the 8-char short suffix, or a 1-based
   list index from a recent ``operator list``.
@@ -52,6 +55,7 @@ HELP_TEXT: str = """\
 Wachtmeater Operator Befehle:
 
 operator new <MEATER_URL>      - Neuen Watcher-Job starten
+operator resume <spec>         - Beendeten Watcher fortsetzen (URL, UUID, short, oder Listen-Index)
 operator delete <spec>         - Watcher loeschen (URL, UUID, short, oder Listen-Index)
 operator list                  - Aktive Watcher auflisten
 operator status                - Operator-Health
@@ -154,8 +158,9 @@ def handle_operator_command(body: str, sender_mxid: str, state: OperatorState) -
 
     Returns:
         A response string for the user, a sentinel (``"__op_new__\\n<url>"``,
-        ``"__op_delete__\\n<url>"``, ``"__op_list__"``, ``"__op_status__"``),
-        or ``None`` if the message is not an operator command.
+        ``"__op_resume__\\n<spec>"``, ``"__op_delete__\\n<spec>"``,
+        ``"__op_list__"``, ``"__op_status__"``), or ``None`` if the message
+        is not an operator command.
     """
     raw = body.strip()
     if not re.match(r"^\s*operator\b", raw, re.IGNORECASE) and raw.lower() not in ("help", "hilfe", "?"):
@@ -181,6 +186,11 @@ def handle_operator_command(body: str, sender_mxid: str, state: OperatorState) -
         if "meater.com/cook/" not in url:
             return f"Fehler: '{url}' sieht nicht wie eine MEATER-URL aus."
         return f"__op_new__\n{url}"
+
+    m = re.match(r"^operator\s+resume\s+(\S+)\s*$", raw, re.IGNORECASE)
+    if m:
+        spec = m.group(1)
+        return f"__op_resume__\n{spec}"
 
     m = re.match(r"^operator\s+delete\s+(\S+)\s*$", raw, re.IGNORECASE)
     if m:
@@ -320,6 +330,29 @@ async def event_loop() -> None:
             except Exception as e:
                 logger.exception("create_resources fehlgeschlagen")
                 await messaging.send_message(operator_room, f"Fehler beim Anlegen: {e}")
+            return
+
+        if response.startswith("__op_resume__\n"):
+            spec = response.removeprefix("__op_resume__\n")
+            resolved = _resolve_delete_spec(spec, op_state)
+            if resolved is None:
+                await messaging.send_message(
+                    operator_room,
+                    f"Konnte '{spec}' nicht aufloesen (URL, UUID, short, oder Listen-Index nach 'operator list').",
+                )
+                return
+            await messaging.send_message(operator_room, f"Setze Watcher fort fuer {resolved} ...")
+            try:
+                await asyncio.to_thread(create_resources, resolved, resume=True)
+                await messaging.send_message(
+                    operator_room,
+                    f"Watcher fortgesetzt: {resolved}\n"
+                    "Cook-Ende-Erkennung ist deaktiviert — bei Bedarf im Watcher-Raum "
+                    "'enable cookend' senden.",
+                )
+            except Exception as e:
+                logger.exception("create_resources (resume) fehlgeschlagen")
+                await messaging.send_message(operator_room, f"Fehler beim Fortsetzen: {e}")
             return
 
         if response.startswith("__op_delete__\n"):
