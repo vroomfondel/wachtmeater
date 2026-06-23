@@ -83,6 +83,8 @@ Send these in the Matrix room the bot has joined (case-insensitive):
 | `disable stall` | Disable stall detection |
 | `enable wrap <temp>` | Enable wrap reminder at internal temp (C) |
 | `disable wrap` | Disable wrap reminder |
+| `enable pull <temp>` | Take-out alert (Matrix message **and** SIP call) when the core temp reaches `<temp>` C; overrides the MEATER target for the target-reached alert. Aliases: `rausnehmen <temp>`, `set pull <temp>` |
+| `disable pull` | Disable the take-out override (MEATER target governs again) |
 | `enable ambient <min> <max>` | Enable ambient range alert (min/max C) |
 | `disable ambient` | Disable ambient range alert |
 | `enable cookend` | Enable cook-end detection (auto-stop) |

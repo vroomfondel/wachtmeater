@@ -106,6 +106,22 @@ class TestAlertSummary:
         lines = mw._alert_summary(base_state)
         assert any("Check-Intervall: 45s (override" in l for l in lines)
 
+    def test_pull_override_off(self, base_state: WatcherState) -> None:
+        base_state.target_override = None
+        lines = mw._alert_summary(base_state)
+        assert any(l == "Pull-Alert (rausnehmen): AUS" for l in lines)
+
+    def test_pull_override_on(self, base_state: WatcherState) -> None:
+        base_state.target_override = 90.0
+        lines = mw._alert_summary(base_state)
+        assert any("Pull-Alert (rausnehmen): AN" in l and "90" in l for l in lines)
+
+    def test_pull_override_already_fired(self, base_state: WatcherState) -> None:
+        base_state.target_override = 90.0
+        base_state.target_reached_calls = 3
+        lines = mw._alert_summary(base_state)
+        assert any("Pull-Alert" in l and "bereits ausgeloest" in l for l in lines)
+
 
 # ============================================================================
 # handle_command
@@ -280,6 +296,30 @@ class TestHandleCommand:
         result = mw.handle_command("disable wrap", base_state)
         assert base_state.tempalert_wrap_enabled is False
         assert result is not None
+
+    @patch.object(mw, "save_state")
+    def test_enable_pull(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.target_reached_calls = 3  # previously fired
+        result = mw.handle_command("enable pull 88", base_state)
+        assert base_state.target_override == 88.0
+        assert base_state.target_reached_calls == 0  # re-armed
+        assert result is not None and "Pull-Alert aktiviert" in result
+
+    @patch.object(mw, "save_state")
+    def test_enable_pull_german_alias(self, _save: MagicMock, base_state: WatcherState) -> None:
+        assert mw.handle_command("rausnehmen 91.5", base_state) is not None
+        assert base_state.target_override == 91.5
+
+    @patch.object(mw, "save_state")
+    def test_disable_pull(self, _save: MagicMock, base_state: WatcherState) -> None:
+        mw.handle_command("enable pull 88", base_state)  # establish an override first
+        result = mw.handle_command("disable pull", base_state)
+        assert result is not None and "deaktiviert" in result
+        assert base_state.target_override is None
+
+    @patch.object(mw, "save_state")
+    def test_pull_without_temp_is_not_a_command(self, _save: MagicMock, base_state: WatcherState) -> None:
+        assert mw.handle_command("enable pull", base_state) is None
 
     @patch.object(mw, "save_state")
     def test_enable_ambient(self, _save: MagicMock, base_state: WatcherState) -> None:
@@ -711,6 +751,51 @@ class TestRunMeaterCheck:
             mw.run_meater_check(base_state)
         mock_call.assert_called()
         assert base_state.wrap_alerted is True
+
+    def test_pull_override_triggers_below_meater_target(self, base_state: WatcherState) -> None:
+        # Override at 88; internal 89 reaches it even though the MEATER target
+        # (96) is not yet hit. Alert goes out as message AND call.
+        base_state.target_override = 88.0
+        data = self._make_data(internal_temp_c=89, target_temp_c=96)
+        mock_send = MagicMock()
+        with (
+            patch.object(mw, "get_meater_data", return_value=data),
+            patch.object(mw, "call_pitmaster") as mock_call,
+            patch.object(mw, "save_state"),
+        ):
+            mw.run_meater_check(base_state, send=mock_send)
+        call_msg = mock_call.call_args[0][0]
+        assert "Rausnehmen" in call_msg and "88" in call_msg
+        assert any("Rausnehmen" in c.args[0] for c in mock_send.call_args_list)
+        assert base_state.target_reached_calls == 1
+
+    def test_pull_override_replaces_meater_target_message(self, base_state: WatcherState) -> None:
+        # When an override is set and reached, the wording is the take-out
+        # message, not the MEATER "Brisket ist fertig" one.
+        base_state.target_override = 90.0
+        data = self._make_data(internal_temp_c=97, target_temp_c=96)
+        with (
+            patch.object(mw, "get_meater_data", return_value=data),
+            patch.object(mw, "call_pitmaster") as mock_call,
+            patch.object(mw, "save_state"),
+        ):
+            mw.run_meater_check(base_state, send=MagicMock())
+        msgs = [c.args[0] for c in mock_call.call_args_list]
+        assert any("Rausnehmen" in m for m in msgs)
+        assert not any("ist fertig" in m for m in msgs)
+
+    def test_no_pull_override_uses_meater_target(self, base_state: WatcherState) -> None:
+        # Without an override, the MEATER target (96) governs; internal 89 < 96
+        # so no target-reached notification fires.
+        data = self._make_data(internal_temp_c=89, target_temp_c=96)
+        with (
+            patch.object(mw, "get_meater_data", return_value=data),
+            patch.object(mw, "call_pitmaster") as mock_call,
+            patch.object(mw, "save_state"),
+        ):
+            mw.run_meater_check(base_state, send=MagicMock())
+        msgs = [c.args[0] for c in mock_call.call_args_list]
+        assert not any("Rausnehmen" in m or "ist fertig" in m for m in msgs)
 
     def test_ambient_too_low(self, base_state: WatcherState) -> None:
         base_state.tempalert_ambient_range_enabled = True

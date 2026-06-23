@@ -498,6 +498,9 @@ class WatcherState:
     startup_test_call_enabled: bool = True
     # Per-cook check-interval override in seconds (None = use config default)
     check_interval_override: int | None = None
+    # User-defined "pull / take out now" core-temp target in C that overrides
+    # the MEATER target for the target-reached alert (None = use MEATER target)
+    target_override: float | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "WatcherState":

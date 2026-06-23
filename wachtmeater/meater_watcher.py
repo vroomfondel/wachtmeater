@@ -19,6 +19,9 @@ Supported Matrix commands (case-insensitive):
     - ``disable stall``             — Disable stall detection.
     - ``enable wrap <temp>``        — Enable wrap reminder at internal temp C.
     - ``disable wrap``              — Disable wrap reminder.
+    - ``enable pull <temp>``        — Take-out alert (message + call) at core
+      temp C; overrides the MEATER target for the target-reached alert.
+    - ``disable pull``              — Disable the take-out override.
     - ``enable ambient <min> <max>``— Enable ambient range alert (min/max C).
     - ``disable ambient``           — Disable ambient range alert.
     - ``enable cookend``            — Enable cook-end detection (auto-stop).
@@ -284,6 +287,15 @@ def _alert_summary(state: WatcherState) -> list[str]:
         lines.append(s)
     else:
         lines.append("Wrap-Reminder: AUS")
+
+    # Pull / take-out target override (overrides the MEATER target)
+    if state.target_override is not None:
+        s = f"Pull-Alert (rausnehmen): AN (Ziel: {state.target_override} C, override MEATER)"
+        if state.target_reached_calls >= 3:
+            s += " [bereits ausgeloest]"
+        lines.append(s)
+    else:
+        lines.append("Pull-Alert (rausnehmen): AUS")
 
     # Ambient range
     if state.tempalert_ambient_range_enabled:
@@ -584,15 +596,31 @@ def run_meater_check(
             logger.warning(f"ALARM Ambient-Bereich: {alarm_msg}")
             call_pitmaster(alarm_msg)
 
-    # 6) Target temperature reached
-    if current_internal and target_temp and current_internal >= target_temp:
+    # 6) Target temperature reached.  A user-defined ``target_override`` (the
+    #    "pull / take out now" temperature) takes precedence over the MEATER
+    #    target; when set, the room is also notified, not just the phone.
+    effective_target = state.target_override if state.target_override is not None else target_temp
+    if current_internal and effective_target and current_internal >= effective_target:
         logger.warning("ZIELTEMPERATUR ERREICHT!")
         if target_reached_calls < 3:
             try:
-                call_pitmaster(
-                    f"Brisket ist fertig! Zieltemperatur von {target_temp} C erreicht. "
-                    f"Aktuelle Temperatur: {current_internal} C"
-                )
+                if state.target_override is not None:
+                    alarm_msg = (
+                        f"Rausnehmen! Deine Ziel-Kerntemperatur von {effective_target} C ist "
+                        f"erreicht (aktuell {current_internal} C). Fleisch jetzt entnehmen!"
+                    )
+                    logger.warning(f"ALARM Pull: {alarm_msg}")
+                    if send is not None:
+                        try:
+                            send(alarm_msg, None)
+                        except Exception:
+                            pass
+                    call_pitmaster(alarm_msg)
+                else:
+                    call_pitmaster(
+                        f"Brisket ist fertig! Zieltemperatur von {effective_target} C erreicht. "
+                        f"Aktuelle Temperatur: {current_internal} C"
+                    )
                 target_reached_calls += 1
             except Exception as e:
                 logger.error(f"Target-reached call failed: {e}")
@@ -674,6 +702,8 @@ enable stall [<delta>]    - Stall-Erkennung AN (opt: min. Anstieg in C)
 disable stall             - Stall-Erkennung AUS
 enable wrap <temp>        - Wrap-Reminder AN (bei Kerntemp in C)
 disable wrap              - Wrap-Reminder AUS
+enable pull <temp>        - Rausnehmen-Alarm AN (override MEATER-Zieltemp, Nachricht + Anruf)
+disable pull              - Rausnehmen-Alarm AUS (wieder MEATER-Zieltemp)
 enable ambient <min> <max>- Ambient-Bereich AN (min/max C)
 disable ambient           - Ambient-Bereich AUS
 enable cookend            - Cook-Ende-Erkennung AN
@@ -796,6 +826,23 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         state.wrap_alerted = False
         save_state(state)
         return "Wrap-Alert zurueckgesetzt. Kann erneut ausloesen."
+
+    # --- set / disable pull (take-out) target override ---
+    m = re.match(r"(?:enable pull|pull an|pull on|pull enable|set pull|rausnehmen)\s+(\d+(?:\.\d+)?)", text)
+    if m:
+        temp = float(m.group(1))
+        state.target_override = temp
+        state.target_reached_calls = 0  # re-arm the take-out notifications
+        save_state(state)
+        return (
+            f"Pull-Alert aktiviert. Alarm (Nachricht + Anruf) zum Rausnehmen bei "
+            f"Kerntemperatur {temp} C — ueberschreibt die MEATER-Zieltemperatur."
+        )
+
+    if text in ("disable pull", "pull aus", "pull off", "pull disable", "reset pull"):
+        state.target_override = None
+        save_state(state)
+        return "Pull-Alert deaktiviert. Es gilt wieder die MEATER-Zieltemperatur."
 
     # --- enable/disable ambient range ---
     m = re.match(r"(?:enable ambient|ambient an|ambient on|ambient enable)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)", text)
