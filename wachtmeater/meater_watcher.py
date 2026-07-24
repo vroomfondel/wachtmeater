@@ -24,6 +24,8 @@ Supported Matrix commands (case-insensitive):
     - ``disable pull``              — Disable the take-out override.
     - ``enable ambient <min> <max>``— Enable ambient range alert (min/max C).
     - ``disable ambient``           — Disable ambient range alert.
+    - ``reset ambient``             — Clear the tracked ambient high-water mark
+      (re-arms the tempdown alert after a deliberate temperature drop).
     - ``enable cookend``            — Enable cook-end detection (auto-stop).
     - ``disable cookend``           — Disable cook-end detection.
     - ``enable offline``            — Enable station-offline alert (SIP on
@@ -671,7 +673,16 @@ def run_meater_check(
         internal_diff = current_internal - last_internal
         logger.debug(f"Internal Change: {internal_diff:+.1f} C (from {last_internal} C)")
 
-    # Update state
+    # Update state.
+    #
+    # The check runs in a worker thread while operator commands mutate ``state``
+    # on the event loop, so a ``reset ambient`` may have landed after we took the
+    # snapshot in ``max_ambient``.  A now-empty high-water mark means exactly
+    # that (or that it was never set) — in both cases the current reading is the
+    # correct new maximum, so don't write the stale snapshot back.
+    if state.max_ambient_temp is None:
+        max_ambient = current_ambient
+
     state.last_internal_temp = current_internal
     state.last_ambient_temp = current_ambient
     state.max_ambient_temp = max_ambient
@@ -712,6 +723,7 @@ enable offline            - Station-Offline-Alert AN
 disable offline           - Station-Offline-Alert AUS
 reset stall               - Stall-Alert zuruecksetzen
 reset wrap                - Wrap-Alert zuruecksetzen
+reset ambient             - Max-Ambient-Hoechstwert zuruecksetzen
 testcall [<text>]         - Testanruf bei Pitmaster mit beliebigem Text
 set interval <sek>        - Check-Intervall in Sekunden setzen
 reset interval            - Check-Intervall auf Standard zuruecksetzen
@@ -861,6 +873,24 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         state.tempalert_ambient_range_enabled = False
         save_state(state)
         return "Ambient-Bereich-Alert deaktiviert."
+
+    # --- reset max ambient high-water mark ---
+    if text in (
+        "reset ambient",
+        "reset maxambient",
+        "reset max ambient",
+        "reset ambient max",
+        "ambient reset",
+    ):
+        previous = state.max_ambient_temp
+        state.max_ambient_temp = None
+        save_state(state)
+        if previous is None:
+            return "Max Ambient war nicht gesetzt — nichts zurueckzusetzen."
+        return (
+            f"Max Ambient zurueckgesetzt (war {previous} C). Der naechste Check setzt "
+            f"den Hoechstwert neu — TempDown-Alert misst ab dann von vorne."
+        )
 
     # --- enable/disable cookend ---
     if text in ("enable cookend", "cookend an", "cookend on", "cookend enable"):

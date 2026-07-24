@@ -97,6 +97,7 @@ Send these in the Matrix room the bot has joined (case-insensitive):
 | `reset interval` | Restore the config-default check interval |
 | `reset stall` | Reset stall alert (re-arms after it fired) |
 | `reset wrap` | Reset wrap alert (re-arms after it fired) |
+| `reset ambient` | Clear the tracked ambient high-water mark (`Max Ambient`). The next check re-seeds it from the current reading, so `tempdown` measures its drop from there. Use after deliberately turning the fire down. Aliases: `reset maxambient`, `reset max ambient`, `ambient reset` |
 | `testcall [<text>]` | Trigger a SIP phone call to the pitmaster with optional spoken text (default: `Wachtmeater Testanruf`). The text keeps its original case so TTS pronounces names correctly. |
 | `hilfe` / `help` / `?` | Show available commands |
 | `stop` / `quit` / `beenden` / `exit` | Shut down the watcher loop |

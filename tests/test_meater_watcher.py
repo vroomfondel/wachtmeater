@@ -367,6 +367,37 @@ class TestHandleCommand:
         assert result is not None
 
     @patch.object(mw, "save_state")
+    def test_reset_ambient(self, _save: MagicMock, cooking_state: WatcherState) -> None:
+        result = mw.handle_command("reset ambient", cooking_state)
+        assert cooking_state.max_ambient_temp is None
+        assert result is not None
+        assert "120.0" in result
+
+    @patch.object(mw, "save_state")
+    def test_reset_ambient_when_unset(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.max_ambient_temp = None
+        result = mw.handle_command("reset ambient", base_state)
+        assert base_state.max_ambient_temp is None
+        assert result is not None
+
+    @patch.object(mw, "save_state")
+    def test_reset_ambient_aliases(self, _save: MagicMock, cooking_state: WatcherState) -> None:
+        for alias in ("reset maxambient", "reset max ambient", "reset ambient max", "ambient reset"):
+            cooking_state.max_ambient_temp = 120.0
+            assert mw.handle_command(alias, cooking_state) is not None
+            assert cooking_state.max_ambient_temp is None
+
+    @patch.object(mw, "save_state")
+    def test_reset_ambient_keeps_range_alert(self, _save: MagicMock, cooking_state: WatcherState) -> None:
+        # Resetting the high-water mark must not touch the ambient range alert.
+        cooking_state.tempalert_ambient_range_enabled = True
+        cooking_state.ambient_range_min = 100.0
+        cooking_state.ambient_range_max = 140.0
+        mw.handle_command("reset ambient", cooking_state)
+        assert cooking_state.tempalert_ambient_range_enabled is True
+        assert cooking_state.ambient_range_min == 100.0
+
+    @patch.object(mw, "save_state")
     def test_unknown_command(self, _save: MagicMock, base_state: WatcherState) -> None:
         assert mw.handle_command("xyzzy", base_state) is None
 
@@ -664,6 +695,24 @@ class TestRunMeaterCheck:
         assert result != "__cook_ended__"
         assert base_state.max_ambient_temp == 115
         assert base_state.max_internal_temp == 72
+
+    def test_reset_ambient_during_check_is_not_clobbered(self, cooking_state: WatcherState) -> None:
+        # The check runs in a worker thread; a `reset ambient` landing while the
+        # scrape is in flight must survive the write-back at the end of the check.
+        data = self._make_data(ambient_temp_c=95)
+
+        def _fetch() -> dict:
+            cooking_state.max_ambient_temp = None  # operator resets mid-check
+            return data
+
+        with (
+            patch.object(mw, "get_meater_data", side_effect=_fetch),
+            patch.object(mw, "call_pitmaster"),
+            patch.object(mw, "save_state"),
+        ):
+            mw.run_meater_check(cooking_state)
+        # Re-seeded from the current reading, not restored to the stale 120.0.
+        assert cooking_state.max_ambient_temp == 95
 
     def test_tempdown_triggers(self, cooking_state: WatcherState) -> None:
         cooking_state.tempalert_tempdown_enabled = True
