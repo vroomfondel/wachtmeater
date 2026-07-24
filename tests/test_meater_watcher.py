@@ -701,7 +701,7 @@ class TestRunMeaterCheck:
         # scrape is in flight must survive the write-back at the end of the check.
         data = self._make_data(ambient_temp_c=95)
 
-        def _fetch() -> dict:
+        def _fetch() -> dict[str, Any]:
             cooking_state.max_ambient_temp = None  # operator resets mid-check
             return data
 
