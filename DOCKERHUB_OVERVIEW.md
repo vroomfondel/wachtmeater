@@ -11,9 +11,9 @@
 
 MEATER BBQ probe monitoring with Matrix chat alerts and SIP phone call notifications.
 
-Scrapes MEATER Cloud cook pages via CDP (Chrome DevTools Protocol), posts periodic status
-updates to Matrix rooms, and triggers SIP phone calls when alerts fire (fire out, target
-temperature reached, stall detected, etc.).
+Reads MEATER Cloud cooks from the cloud WebSocket (CDP page scraping as fallback), posts
+periodic status updates to Matrix rooms, and triggers SIP phone calls when alerts fire
+(fire out, target temperature reached, stall detected, etc.).
 
 - **Source**: [GitHub](https://github.com/vroomfondel/wachtmeater)
 - **PyPI**: [wachtmeater](https://pypi.org/project/wachtmeater/)
@@ -45,7 +45,8 @@ Long cooks (10-16 h) mean you sleep while the meat is on — and miss it when th
 
 ## What it does
 
-- Periodically scrapes a MEATER Cloud cook URL via a remote Chrome browser (CDP)
+- Periodically reads a MEATER Cloud cook from the cloud WebSocket — temperatures at 0.03125 °C resolution, no browser required; falls back to CDP page scraping (whole degrees) if the cloud is unreachable
+- Captures a cook-page screenshot via a remote Chrome browser (CDP); optional (`SCREENSHOT_ENABLED=false` runs fully browserless)
 - Posts temperature status (internal, ambient, target) to E2E-encrypted Matrix rooms
 - Auto-creates a dedicated Matrix room per cook UUID; can simultaneously broadcast to a fixed operator room (room ID *or* `#alias:srv`)
 - Listens for Matrix commands to enable/disable alerts (tempdown, stall, wrap, ruhephase, ambient range, cookend, station-offline), override the per-cook check interval, and for `testcall [<text>]` to dial the pitmaster on demand

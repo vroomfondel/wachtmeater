@@ -71,16 +71,17 @@ SyncSender = Callable[[str, str | None], None]
 class MeaterData(TypedDict, total=False):
     """Flat dictionary of MEATER cook values returned by the monitor."""
 
-    internal_temp_c: int | None
-    ambient_temp_c: int | None
-    target_temp_c: int | None
+    internal_temp_c: float | None
+    ambient_temp_c: float | None
+    target_temp_c: float | None
     remaining_time: str | None
     elapsed_time: str | None
     status: str
     cook_name: str | None
     screenshot: str | None
     started_at: str | None
-    peak_temp_c: int | None
+    peak_temp_c: float | None
+    source: str
     error: str
     error_kind: Literal["transient", "cook_gone"]
 
@@ -191,7 +192,10 @@ def effective_check_interval(state: WatcherState) -> int:
 
 
 def get_meater_data() -> MeaterData:
-    """Fetch current MEATER cook data by calling ``extract_via_browser`` directly.
+    """Fetch current MEATER cook data by calling ``extract_cook_data`` directly.
+
+    Uses the hybrid fetcher: MEATER Cloud WebSocket first (sub-degree
+    temperatures, no browser needed), DOM scraping as fallback.
 
     Returns:
         Flat dictionary with cook fields on success, or a dictionary
@@ -199,11 +203,11 @@ def get_meater_data() -> MeaterData:
     """
     from wachtmeater.meater_monitor import (
         CookNotFoundError,
-        extract_via_browser,
+        extract_cook_data,
     )
 
     try:
-        cook = extract_via_browser(MEATER_URL)
+        cook = extract_cook_data(MEATER_URL)
         data: MeaterData = {
             "internal_temp_c": cook.internal_temp_c,
             "ambient_temp_c": cook.ambient_temp_c,
@@ -215,15 +219,17 @@ def get_meater_data() -> MeaterData:
             "screenshot": str(cook.screenshot) if cook.screenshot else None,
             "started_at": cook.started_at,
             "peak_temp_c": cook.peak_temp_c,
+            "source": cook.source,
         }
         return data
     except CookNotFoundError as e:
         # The cook URL / cook ID is genuinely gone — legitimate cook-end signal.
         return {"error": str(e), "error_kind": "cook_gone"}
     except Exception as e:
-        # CdpUnavailableError and any other unexpected failure are treated as
-        # transient, our-side problems.  They must NOT be mistaken for cook-end:
-        # a CDP timeout previously caused the cook to be falsely declared done.
+        # CdpUnavailableError, CloudUnavailableError and any other unexpected
+        # failure are treated as transient, our-side problems.  They must NOT be
+        # mistaken for cook-end: a CDP timeout previously caused the cook to be
+        # falsely declared done.
         return {"error": str(e), "error_kind": "transient"}
 
 
@@ -423,9 +429,9 @@ def run_meater_check(
 
         lines = [f"⚠ MEATER Station offline (Cycle {state.offline_streak}, ~{offline_minutes} Min.)"]
         if last_internal is not None:
-            lines.append(f"Letzter Internal: {last_internal} C")
+            lines.append(f"Letzter Internal: {last_internal:.1f} C")
         if last_ambient is not None:
-            lines.append(f"Letzter Ambient: {last_ambient} C")
+            lines.append(f"Letzter Ambient: {last_ambient:.1f} C")
         lines.append(f"Time: {timestamp}")
         offline_msg = "\n".join(lines)
 
@@ -494,20 +500,24 @@ def run_meater_check(
     # Build status text
     lines = [f"MEATER Status: {cook_name}", f"URL: {MEATER_URL}"]
     if current_internal is not None:
-        lines.append(f"Internal (Fleisch): {current_internal} C")
+        lines.append(f"Internal (Fleisch): {current_internal:.1f} C")
     if current_ambient is not None:
-        lines.append(f"Ambient (Rauch): {current_ambient} C")
+        lines.append(f"Ambient (Rauch): {current_ambient:.1f} C")
     if target_temp is not None:
-        lines.append(f"Target: {target_temp} C")
+        lines.append(f"Target: {target_temp:.1f} C")
     if max_ambient is not None:
-        lines.append(f"Max Ambient: {max_ambient} C")
+        lines.append(f"Max Ambient: {max_ambient:.1f} C")
     if max_internal is not None:
-        lines.append(f"Max Internal: {max_internal} C")
+        lines.append(f"Max Internal: {max_internal:.1f} C")
     if remaining:
         lines.append(f"Remaining: {remaining}")
     if elapsed:
         lines.append(f"Elapsed: {elapsed}")
     lines.append(f"Status: {cook_status}")
+    # Only worth a line when we fell back — it explains why the decimals
+    # suddenly went away.
+    if data.get("source") == "browser":
+        lines.append("Quelle: Browser-Fallback (nur ganze Grad)")
     lines.append("---")
     lines.extend(_alert_summary(state))
     lines.append(f"Time: {timestamp}")
@@ -533,7 +543,7 @@ def run_meater_check(
             if ambient_drop >= AMBIENT_TEMP_DROP_THRESHOLD:
                 alarm_msg = (
                     f"ACHTUNG: Smoker Temperatur ist um {ambient_drop:.1f} C vom "
-                    f"Hoechstwert gefallen! Max: {max_ambient} C, jetzt: {current_ambient} C. "
+                    f"Hoechstwert gefallen! Max: {max_ambient:.1f} C, jetzt: {current_ambient:.1f} C. "
                     f"Feuer koennte ausgegangen sein!"
                 )
                 logger.warning(f"ALARM TempDown: {alarm_msg}")
@@ -544,7 +554,7 @@ def run_meater_check(
         rp_target = state.ruhephase_target_temp
         if current_internal is not None and current_internal <= rp_target:
             alarm_msg = (
-                f"Ruhephase beendet! Fleischtemperatur ({current_internal} C) hat "
+                f"Ruhephase beendet! Fleischtemperatur ({current_internal:.1f} C) hat "
                 f"Ziel-Abkuehltemperatur ({rp_target} C) erreicht."
             )
             logger.warning(f"ALARM Ruhephase: {alarm_msg}")
@@ -563,7 +573,7 @@ def run_meater_check(
                 alarm_msg = (
                     f"Stall erkannt! Interne Temperatur ist in den letzten "
                     f"{STALL_WINDOW} Checks nur um {rise:.1f} C gestiegen "
-                    f"(von {oldest} C auf {newest} C). Jetzt wrappen?"
+                    f"(von {oldest:.1f} C auf {newest:.1f} C). Jetzt wrappen?"
                 )
                 logger.warning(f"ALARM Stall: {alarm_msg}")
                 call_pitmaster(alarm_msg)
@@ -582,7 +592,7 @@ def run_meater_check(
         wrap_temp = state.wrap_target_temp
         if current_internal is not None and current_internal >= wrap_temp:
             alarm_msg = (
-                f"Wrap-Reminder! Kerntemperatur hat {current_internal} C erreicht "
+                f"Wrap-Reminder! Kerntemperatur hat {current_internal:.1f} C erreicht "
                 f"(Ziel: {wrap_temp} C). Jetzt in Butcher Paper/Folie einwickeln!"
             )
             logger.warning(f"ALARM Wrap: {alarm_msg}")
@@ -594,11 +604,11 @@ def run_meater_check(
         lo = state.ambient_range_min
         hi = state.ambient_range_max
         if lo is not None and current_ambient < lo:
-            alarm_msg = f"Ambient zu niedrig! {current_ambient} C unter Minimum {lo} C. " f"Feuer nachschueren!"
+            alarm_msg = f"Ambient zu niedrig! {current_ambient:.1f} C unter Minimum {lo} C. " f"Feuer nachschueren!"
             logger.warning(f"ALARM Ambient-Bereich: {alarm_msg}")
             call_pitmaster(alarm_msg)
         if hi is not None and current_ambient > hi:
-            alarm_msg = f"Ambient zu hoch! {current_ambient} C ueber Maximum {hi} C. " f"Luftzufuhr reduzieren!"
+            alarm_msg = f"Ambient zu hoch! {current_ambient:.1f} C ueber Maximum {hi} C. " f"Luftzufuhr reduzieren!"
             logger.warning(f"ALARM Ambient-Bereich: {alarm_msg}")
             call_pitmaster(alarm_msg)
 
@@ -612,8 +622,8 @@ def run_meater_check(
             try:
                 if state.target_override is not None:
                     alarm_msg = (
-                        f"Rausnehmen! Deine Ziel-Kerntemperatur von {effective_target} C ist "
-                        f"erreicht (aktuell {current_internal} C). Fleisch jetzt entnehmen!"
+                        f"Rausnehmen! Deine Ziel-Kerntemperatur von {effective_target:.1f} C ist "
+                        f"erreicht (aktuell {current_internal:.1f} C). Fleisch jetzt entnehmen!"
                     )
                     logger.warning(f"ALARM Pull: {alarm_msg}")
                     if send is not None:
@@ -624,8 +634,8 @@ def run_meater_check(
                     call_pitmaster(alarm_msg)
                 else:
                     call_pitmaster(
-                        f"Brisket ist fertig! Zieltemperatur von {effective_target} C erreicht. "
-                        f"Aktuelle Temperatur: {current_internal} C"
+                        f"Brisket ist fertig! Zieltemperatur von {effective_target:.1f} C erreicht. "
+                        f"Aktuelle Temperatur: {current_internal:.1f} C"
                     )
                 target_reached_calls += 1
             except Exception as e:
@@ -640,8 +650,8 @@ def run_meater_check(
             and current_internal < COOKEND_PROBE_REMOVED_TEMP
         ):
             end_msg = (
-                f"Cook-Ende erkannt: Kerntemperatur auf {current_internal} C gefallen "
-                f"(Max war {max_internal} C). Probe wurde vermutlich entfernt."
+                f"Cook-Ende erkannt: Kerntemperatur auf {current_internal:.1f} C gefallen "
+                f"(Max war {max_internal:.1f} C). Probe wurde vermutlich entfernt."
             )
             logger.warning(end_msg)
             if send is not None:
@@ -675,7 +685,7 @@ def run_meater_check(
     # Internal temperature change info
     if last_internal is not None and current_internal is not None:
         internal_diff = current_internal - last_internal
-        logger.debug(f"Internal Change: {internal_diff:+.1f} C (from {last_internal} C)")
+        logger.debug(f"Internal Change: {internal_diff:+.1f} C (from {last_internal:.1f} C)")
 
     # Update state.
     #
@@ -693,7 +703,7 @@ def run_meater_check(
     state.max_internal_temp = max_internal
     state.target_reached_calls = target_reached_calls
     save_state(state)
-    logger.debug(f"State saved (Max Ambient: {max_ambient} C)")
+    logger.debug(f"State saved (Max Ambient: {max_ambient} C, Quelle: {data.get('source', 'unknown')})")
 
     if state.cook_ended:
         return "__cook_ended__"
@@ -824,7 +834,7 @@ def handle_command(body: str, state: WatcherState) -> str | None:
     # --- enable/disable stall ---
     m = re.match(r"(?:enable stall|stall an|stall on|stall enable)(?:\s+(\d+(?:\.\d+)?))?$", text)
     if m:
-        delta = float(m.group(1)) if m.group(1) else 1.0
+        delta = float(m.group(1)) if m.group(1) else 0.3
         state.tempalert_stall_enabled = True
         state.stall_min_delta = delta
         state.stall_alerted = False
@@ -915,7 +925,7 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         if previous is None:
             return "Max Ambient war nicht gesetzt — nichts zurueckzusetzen."
         return (
-            f"Max Ambient zurueckgesetzt (war {previous} C). Der naechste Check setzt "
+            f"Max Ambient zurueckgesetzt (war {previous:.1f} C). Der naechste Check setzt "
             f"den Hoechstwert neu — TempDown-Alert misst ab dann von vorne."
         )
 

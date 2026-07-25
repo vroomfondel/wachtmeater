@@ -147,17 +147,16 @@ def main() -> None:
     elif args.command == "monitor":
         import json
 
-        from wachtmeater.meater_monitor import extract_via_browser
+        from wachtmeater.meater_monitor import extract_cook_data
 
         url = args.cook_url or os.environ.get("MEATER_URL")
         if not url:
             logger.error("No cook URL provided (pass as argument or set MEATER_URL)")
             sys.exit(1)
         logger.info("Running single-shot MEATER monitor check...")
-        cook = extract_via_browser(url)
+        cook = extract_cook_data(url)
         output = cook._asdict()
         output["url"] = url
-        output["source"] = "playwright/browser"
         print(json.dumps(output, indent=2, ensure_ascii=False))
 
     elif args.command == "call":

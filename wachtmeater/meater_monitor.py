@@ -2,8 +2,14 @@
 """MEATER Cook Monitor.
 
 Extracts cooking data (temperatures, status, timing) from MEATER Cloud
-share URLs by scraping the rendered page via a remote Chrome DevTools
-Protocol (CDP) browser instance using Playwright.
+share URLs via two paths, combined by :func:`extract_cook_data`:
+
+1.  The MEATER Cloud WebSocket (:mod:`wachtmeater.meater_cloud`) — preferred.
+    Needs no browser and carries temperatures at 1/32 C resolution.
+2.  Scraping the rendered page through a remote Chrome DevTools Protocol
+    (CDP) browser via Playwright (:func:`extract_via_browser`) — the fallback,
+    and the source of the cook-page screenshot. Its temperatures are whole
+    degrees, because the share page rounds before rendering.
 
 Usage:
     wachtmeater monitor <cook-url>
@@ -57,6 +63,10 @@ class _RawCookData(TypedDict):
 class CookData(NamedTuple):
     """Parsed cooking data from a MEATER Cloud cook page.
 
+    Temperatures are floats: the MEATER Cloud WebSocket carries them at 1/32 C
+    resolution. The DOM-scraping path can only ever produce whole degrees,
+    because the share page rounds before rendering.
+
     Attributes:
         cook_name: Name or label of the cook session.
         started_at: Timestamp when the cook started.
@@ -72,21 +82,24 @@ class CookData(NamedTuple):
         battery: MEATER probe battery percentage.
         peak_temp_c: Peak internal temperature reported by the MEATER summary.
         screenshot: Filesystem path to a screenshot of the cook page.
+        source: Which path produced this record — ``"cloud-ws"`` (WebSocket,
+            sub-degree) or ``"browser"`` (DOM scrape, whole degrees).
     """
 
     cook_name: str | None = None
     started_at: str | None = None
-    internal_temp_c: int | None = None
-    target_temp_c: int | None = None
-    ambient_temp_c: int | None = None
+    internal_temp_c: float | None = None
+    target_temp_c: float | None = None
+    ambient_temp_c: float | None = None
     remaining_time: str | None = None
     remaining_minutes: int | None = None
     elapsed_time: str | None = None
     elapsed_minutes: int | None = None
     status: str = "unknown"
     battery: int | None = None
-    peak_temp_c: int | None = None
+    peak_temp_c: float | None = None
     screenshot: Path | str | None = None
+    source: str = "unknown"
 
 
 class MeaterFetchError(Exception):
@@ -240,6 +253,121 @@ def _reap_unresponsive_targets(cdp_endpoint: str, cdp_host: str) -> None:
             logger.warning(f"Tab reaper: failed to close tab {tid}: {e}")
 
 
+def _cdp_ws_url() -> str:
+    """Resolve the CDP browser WebSocket URL, clearing hung tabs first.
+
+    Returns:
+        The browser-level CDP WebSocket URL, rewritten to the configured host.
+
+    Raises:
+        CdpUnavailableError: The CDP endpoint was unreachable or returned no
+            usable WebSocket URL — a transient, our-side problem that is never
+            evidence the cook has ended.
+    """
+    try:
+        logger.info(f"Fetching CDP WebSocket URL from {CDP_ENDPOINT}")
+        resp = requests.get(f"{CDP_ENDPOINT}/json/version", timeout=10)
+        resp.raise_for_status()
+        ws_url: str = resp.json().get("webSocketDebuggerUrl")
+        cdp_host = CDP_ENDPOINT.replace("http://", "").replace("https://", "")
+        ws_url = ws_url.replace("ws://localhost:9222", f"ws://{cdp_host}")
+        logger.debug(f"CDP WebSocket URL: {ws_url}")
+    except Exception as e:
+        raise CdpUnavailableError(f"Failed to get WebSocket URL: {e}") from e
+
+    # Defend against a hung tab in the shared Chrome wedging connect_over_cdp:
+    # close any unresponsive tabs first, leaving healthy (foreign) tabs intact.
+    _reap_unresponsive_targets(CDP_ENDPOINT, cdp_host)
+    return ws_url
+
+
+def capture_screenshot(url: str) -> Path:
+    """Screenshot the cook page via the CDP browser, without parsing it.
+
+    Used by the hybrid path: the WebSocket supplies the numbers, but a visual
+    of the dial and graph is still worth posting to Matrix.
+
+    Args:
+        url: Full MEATER Cloud cook URL to render.
+
+    Returns:
+        Filesystem path of the written screenshot.
+
+    Raises:
+        CdpUnavailableError: The CDP endpoint or the navigation failed.
+    """
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    from playwright.sync_api import sync_playwright
+
+    ws_url = _cdp_ws_url()
+    meater_uuid: str = url.rstrip("/").rsplit("/", 1)[-1]
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    screenshot_path = SCREENSHOT_DIR / f"meater-screenshot-{meater_uuid}.png"
+
+    with sync_playwright() as p:
+        try:
+            browser = p.chromium.connect_over_cdp(ws_url, timeout=60000)
+        except Exception as e:
+            raise CdpUnavailableError(f"CDP connect failed: {e}") from e
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        page = context.pages[0] if context.pages else context.new_page()
+        try:
+            try:
+                page.goto(url, timeout=30000)
+            except PlaywrightTimeoutError as e:
+                raise CdpUnavailableError(f"Navigation to cook URL timed out: {e}") from e
+            page.wait_for_timeout(5000)  # let the dial and graph render
+            page.screenshot(path=str(screenshot_path), full_page=True)
+            logger.info(f"Screenshot saved: {screenshot_path}")
+            return screenshot_path
+        finally:
+            browser.close()
+
+
+def extract_cook_data(url: str) -> CookData:
+    """Fetch cook data, preferring the MEATER Cloud WebSocket over scraping.
+
+    The hybrid entry point. The WebSocket is tried first because it yields
+    sub-degree temperatures and needs no browser; the DOM scraper remains the
+    fallback for when MEATER changes the wire format or the cloud is
+    unreachable. A screenshot is attached best-effort when the WebSocket path
+    succeeds and ``cfg.browser.screenshot_enabled`` is set — a failure there
+    costs the image, never the reading.
+
+    A :class:`CookNotFoundError` from the WebSocket path is propagated rather
+    than retried through the browser: both paths read the same share URL, so a
+    404/410 is authoritative evidence the cook is gone.
+
+    Args:
+        url: Full MEATER Cloud cook URL.
+
+    Returns:
+        Cook data with ``source`` recording which path produced it.
+
+    Raises:
+        CookNotFoundError: The cook no longer exists upstream.
+        MeaterFetchError: Both paths failed for transient reasons.
+    """
+    if cfg.monitoring.cloud_ws_enabled:
+        from wachtmeater.meater_cloud import fetch_cook_data
+
+        try:
+            cook = fetch_cook_data(url)
+        except CookNotFoundError:
+            raise
+        except Exception as e:
+            logger.warning(f"MEATER Cloud WebSocket failed ({e}) — falling back to browser scraping.")
+        else:
+            if cfg.browser.screenshot_enabled:
+                try:
+                    cook = cook._replace(screenshot=str(capture_screenshot(url)))
+                except Exception as e:
+                    logger.warning(f"Screenshot failed ({e}) — continuing without an image.")
+            return cook
+
+    return extract_via_browser(url)
+
+
 def extract_via_browser(url: str) -> CookData:
     """Scrape the rendered MEATER cook page via a remote CDP browser.
 
@@ -261,23 +389,9 @@ def extract_via_browser(url: str) -> CookData:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 
-    # First, get the WebSocket URL from the CDP endpoint.  A failure here
-    # means our CDP infrastructure is unreachable — a transient, our-side
-    # problem, never a sign that the cook itself has ended.
-    try:
-        logger.info(f"Fetching CDP WebSocket URL from {CDP_ENDPOINT}")
-        resp = requests.get(f"{CDP_ENDPOINT}/json/version", timeout=10)
-        resp.raise_for_status()
-        ws_url: str = resp.json().get("webSocketDebuggerUrl")
-        cdp_host = CDP_ENDPOINT.replace("http://", "").replace("https://", "")
-        ws_url = ws_url.replace("ws://localhost:9222", f"ws://{cdp_host}")
-        logger.debug(f"CDP WebSocket URL: {ws_url}")
-    except Exception as e:
-        raise CdpUnavailableError(f"Failed to get WebSocket URL: {e}") from e
-
-    # Defend against a hung tab in the shared Chrome wedging connect_over_cdp:
-    # close any unresponsive tabs first, leaving healthy (foreign) tabs intact.
-    _reap_unresponsive_targets(CDP_ENDPOINT, cdp_host)
+    # A failure here means our CDP infrastructure is unreachable — a
+    # transient, our-side problem, never a sign that the cook itself has ended.
+    ws_url = _cdp_ws_url()
 
     with sync_playwright() as p:
         logger.info("Connecting to browser via CDP...")
@@ -463,6 +577,7 @@ def extract_via_browser(url: str) -> CookData:
                 status=status,
                 peak_temp_c=peak_temp_c,
                 screenshot=str(screenshot_path),
+                source="browser",
             )
         finally:
             browser.close()

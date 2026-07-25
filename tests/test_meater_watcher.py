@@ -291,7 +291,7 @@ class TestHandleCommand:
     def test_enable_stall_default_delta(self, _save: MagicMock, base_state: WatcherState) -> None:
         result = mw.handle_command("enable stall", base_state)
         assert base_state.tempalert_stall_enabled is True
-        assert base_state.stall_min_delta == 1.0
+        assert base_state.stall_min_delta == 0.3
         assert result is not None
 
     @patch.object(mw, "save_state")
@@ -575,9 +575,9 @@ class TestApplyAlertDefaults:
 
 
 class TestGetMeaterData:
-    """Tests for get_meater_data — patch extract_via_browser."""
+    """Tests for get_meater_data — patch extract_cook_data."""
 
-    @patch("wachtmeater.meater_monitor.extract_via_browser")
+    @patch("wachtmeater.meater_monitor.extract_cook_data")
     def test_success(self, mock_extract: MagicMock) -> None:
         from wachtmeater.meater_monitor import CookData
 
@@ -598,21 +598,21 @@ class TestGetMeaterData:
         assert result["status"] == "cooking"
         assert result["cook_name"] == "Brisket"
 
-    @patch("wachtmeater.meater_monitor.extract_via_browser")
+    @patch("wachtmeater.meater_monitor.extract_cook_data")
     def test_extract_raises_returns_error(self, mock_extract: MagicMock) -> None:
         mock_extract.side_effect = RuntimeError("browser connection failed")
         result = mw.get_meater_data()
         assert "error" in result
         assert "browser connection failed" in result["error"]
 
-    @patch("wachtmeater.meater_monitor.extract_via_browser")
+    @patch("wachtmeater.meater_monitor.extract_cook_data")
     def test_timeout_exception(self, mock_extract: MagicMock) -> None:
         mock_extract.side_effect = TimeoutError("Timeout")
         result = mw.get_meater_data()
         assert "error" in result
         assert "Timeout" in result["error"]
 
-    @patch("wachtmeater.meater_monitor.extract_via_browser")
+    @patch("wachtmeater.meater_monitor.extract_cook_data")
     def test_generic_exception(self, mock_extract: MagicMock) -> None:
         mock_extract.side_effect = OSError("no such file")
         result = mw.get_meater_data()

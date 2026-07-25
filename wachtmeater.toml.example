@@ -6,6 +6,9 @@ state_file_dir = "/data"
 [browser]
 cdp_url        = "http://chrome-kasmvnc.kasmvnc.svc.cluster.local:9222"
 screenshot_dir = "/data"
+# Screenshots are the only thing that still needs CDP on the happy path —
+# set false to run fully browserless.
+screenshot_enabled = true
 
 [sip]
 operator_url  = "http://sipstuff-operator.sipstuff.svc.cluster.local/call"
@@ -25,6 +28,10 @@ check_interval              = 600
 stall_window                = 3
 cookend_error_threshold     = 3
 cookend_probe_removed_temp  = 35
+# Read temperatures from the MEATER Cloud WebSocket (0.03125 C resolution)
+# instead of the page DOM (whole degrees). Scraping stays as fallback.
+cloud_ws_enabled            = true
+cloud_ws_timeout            = 20.0
 
 [alerts]
 # Initial alert defaults — applied only on first run (no existing state file).
@@ -33,7 +40,7 @@ tempalert_tempdown_enabled = true       # Ambient-Abfall vom Max (Feuer aus?)
 tempalert_ruhephase_enabled = false     # Abkühlung nach Cook
 ruhephase_target_temp = 0.0            # Zieltemp in C (0 = nicht gesetzt)
 tempalert_stall_enabled = false         # Plateau-Erkennung (Kerntemp steigt kaum)
-stall_min_delta = 1.0                   # Mindest-Anstieg in C über Stall-Window
+stall_min_delta = 0.3                   # Mindest-Anstieg in C über Stall-Window
 tempalert_wrap_enabled = false          # Einmaliger Wrap-Reminder
 wrap_target_temp = 0.0                  # Kerntemp in C (0 = nicht gesetzt)
 tempalert_ambient_range_enabled = false # Smoker zu heiss / zu kalt

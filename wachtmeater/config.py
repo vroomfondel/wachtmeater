@@ -80,7 +80,7 @@ Environment variable reference
     ``ALERT_DEFAULT_RUHEPHASE_ENABLED`` (``false``),
     ``ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP`` (``0.0``),
     ``ALERT_DEFAULT_STALL_ENABLED`` (``false``),
-    ``ALERT_DEFAULT_STALL_MIN_DELTA`` (``1.0``),
+    ``ALERT_DEFAULT_STALL_MIN_DELTA`` (``0.3``),
     ``ALERT_DEFAULT_WRAP_ENABLED`` (``false``),
     ``ALERT_DEFAULT_WRAP_TARGET_TEMP`` (``0.0``),
     ``ALERT_DEFAULT_AMBIENT_RANGE_ENABLED`` (``false``),
@@ -260,10 +260,15 @@ class BrowserConfig(_EnvMixin):
     Attributes:
         cdp_url: Chrome DevTools Protocol HTTP endpoint (``BROWSER_CDP_URL``).
         screenshot_dir: Directory for cook-page screenshots (``SCREENSHOT_DIR``).
+        screenshot_enabled: Capture a cook-page screenshot alongside the
+            WebSocket data (``SCREENSHOT_ENABLED``). Screenshots are the only
+            remaining reason the watcher needs CDP at all; disabling this
+            makes the happy path fully browserless.
     """
 
     cdp_url: str = env("BROWSER_CDP_URL", default="http://chrome-kasmvnc.kasmvnc.svc.cluster.local:9222")
     screenshot_dir: str = env("SCREENSHOT_DIR", default="/data")
+    screenshot_enabled: bool = env("SCREENSHOT_ENABLED", default=True)
 
 
 @envdataclass
@@ -328,6 +333,12 @@ class MonitoringConfig(_EnvMixin):
         station_offline_call_threshold: Consecutive offline cycles before
             a SIP call is fired for a prolonged station outage
             (``STATION_OFFLINE_CALL_THRESHOLD``).
+        cloud_ws_enabled: Prefer the MEATER Cloud WebSocket over DOM scraping
+            (``CLOUD_WS_ENABLED``). The WebSocket carries sub-degree
+            temperatures; the browser remains the fallback. Set to ``False``
+            to force the legacy scraping path.
+        cloud_ws_timeout: Seconds to wait for the share page and the
+            WebSocket's first cook frame (``CLOUD_WS_TIMEOUT``).
     """
 
     ambient_temp_drop_threshold: int = env("AMBIENT_TEMP_DROP_THRESHOLD", default=10)
@@ -336,6 +347,8 @@ class MonitoringConfig(_EnvMixin):
     cookend_error_threshold: int = env("COOKEND_ERROR_THRESHOLD", default=3)
     cookend_probe_removed_temp: float = env("COOKEND_PROBE_REMOVED_TEMP", default=35.0)
     station_offline_call_threshold: int = env("STATION_OFFLINE_CALL_THRESHOLD", default=2)
+    cloud_ws_enabled: bool = env("CLOUD_WS_ENABLED", default=True)
+    cloud_ws_timeout: float = env("CLOUD_WS_TIMEOUT", default=20.0)
 
 
 @envdataclass
@@ -457,7 +470,7 @@ class AlertDefaultsConfig(_EnvMixin):
     tempalert_ruhephase_enabled: bool = env("ALERT_DEFAULT_RUHEPHASE_ENABLED", default=False)
     ruhephase_target_temp: float = env("ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP", default=0.0)
     tempalert_stall_enabled: bool = env("ALERT_DEFAULT_STALL_ENABLED", default=False)
-    stall_min_delta: float = env("ALERT_DEFAULT_STALL_MIN_DELTA", default=1.0)
+    stall_min_delta: float = env("ALERT_DEFAULT_STALL_MIN_DELTA", default=0.3)
     tempalert_wrap_enabled: bool = env("ALERT_DEFAULT_WRAP_ENABLED", default=False)
     wrap_target_temp: float = env("ALERT_DEFAULT_WRAP_TARGET_TEMP", default=0.0)
     tempalert_ambient_range_enabled: bool = env("ALERT_DEFAULT_AMBIENT_RANGE_ENABLED", default=False)
@@ -485,7 +498,7 @@ class WatcherState:
     tempalert_ruhephase_enabled: bool = False
     ruhephase_target_temp: float | None = None
     tempalert_stall_enabled: bool = False
-    stall_min_delta: float = 1.0
+    stall_min_delta: float = 0.3
     stall_alerted: bool = False
     tempalert_wrap_enabled: bool = False
     wrap_target_temp: float | None = None

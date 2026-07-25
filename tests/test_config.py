@@ -96,7 +96,7 @@ class TestAlertDefaultsConfig:
         assert cfg.tempalert_ruhephase_enabled is False
         assert cfg.ruhephase_target_temp == 0.0
         assert cfg.tempalert_stall_enabled is False
-        assert cfg.stall_min_delta == 1.0
+        assert cfg.stall_min_delta == 0.3
         assert cfg.tempalert_wrap_enabled is False
         assert cfg.wrap_target_temp == 0.0
         assert cfg.tempalert_ambient_range_enabled is False

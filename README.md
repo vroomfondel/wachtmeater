@@ -11,10 +11,10 @@
 # wachtmeater
 
 MEATER BBQ probe monitoring with Matrix chat alerts and SIP phone call notifications.
-Scrapes MEATER Cloud cook pages via CDP (Chrome DevTools Protocol), posts status updates
-to E2E-encrypted Matrix rooms, and calls you when something needs attention (fire out,
-target reached, stall, cook ended, etc.). Supports automatic per-cook Matrix room creation
-and TOML-based configuration.
+Reads MEATER Cloud cooks directly from the cloud WebSocket (with CDP page scraping as
+fallback), posts status updates to E2E-encrypted Matrix rooms, and calls you when
+something needs attention (fire out, target reached, stall, cook ended, etc.). Supports
+automatic per-cook Matrix room creation and TOML-based configuration.
 
 ## Why this exists
 
@@ -51,7 +51,8 @@ When things go sideways (or the cook finishes), a SIP phone call is triggered au
 | Module | Description |
 |---|---|
 | `meater_watcher` | Persistent async event loop: periodic MEATER checks + Matrix command interface |
-| `meater_monitor` | Single-shot CDP scraper: extracts temperatures, status, timing from a MEATER Cloud cook URL |
+| `meater_monitor` | Single-shot fetch: hybrid entry point (`extract_cook_data`) that prefers the cloud WebSocket and falls back to CDP page scraping; also captures the cook-page screenshot |
+| `meater_cloud` | MEATER Cloud WebSocket client: sub-degree temperatures without a browser (see [Temperature resolution](#temperature-resolution)) |
 | `create_meater_watcher_job` | Deploys/destroys the watcher stack as a Kubernetes Job (Namespace, Secret, Job). In-cluster vs out-of-cluster auth detected automatically. |
 | `operator` | Long-running Matrix-driven controller: spawns/destroys/lists watcher Jobs from `operator …` chat commands. Pitmaster-MXID gate, auto-trusts own Matrix devices for cross-pod E2E. |
 | `call_pitmaster` | Triggers a SIP phone call via sipstuff-operator |
@@ -121,12 +122,30 @@ When `cookend` is enabled, the watcher uses four independent mechanisms to detec
 
 | # | Mechanism | Trigger | Default threshold |
 |---|---|---|---|
-| A | **Consecutive fetch errors** | CDP scrape fails N times in a row | `COOKEND_ERROR_THRESHOLD` = 3 |
+| A | **Consecutive fetch errors** | Fetch fails N times in a row | `COOKEND_ERROR_THRESHOLD` = 3 |
 | B | **Probe removed** | Internal temp drops below threshold after having been above 50 °C | `COOKEND_PROBE_REMOVED_TEMP` = 35.0 °C |
 | C | **Status "done"** | MEATER reports internal temp ≥ target | — |
-| D | **MEATER Cloud "finished"** | Cook page shows summary view (`#cook.finished` CSS class) | — |
+| D | **MEATER Cloud "finished"** | Cook is reported finished (`cookSummary.isFinished`, or the `#cook.finished` CSS class when scraping) | — |
 
 Mechanisms A, B, and D post a Matrix message and trigger a SIP phone call. Mechanism C sets cook-ended state silently (the watcher loop posts a generic shutdown message). The watcher loop stops automatically once any mechanism fires.
+
+A genuine HTTP 404/410 on the cook URL is treated as authoritative "cook is gone" on both fetch paths. Every other failure — CDP outage, cloud unreachable, timeout — is transient and never ends a cook.
+
+## Temperature resolution
+
+The cook page renders temperatures already rounded to whole degrees (`.internal-value` literally contains `95°`), so no amount of DOM parsing can recover decimals. The WebSocket feeding that page carries the underlying fixed-point integers instead, which is why `meater_cloud` is the preferred path:
+
+| Field | Raw | ÷ 32 | Page shows |
+|---|---|---|---|
+| `internal` | 3044 | **95.125 °C** | `95°` |
+| `ambient` | 3562 | **111.3125 °C** | `111°` |
+| `target` | 3136 | **98.0 °C** | `98°` |
+
+The divisor is the share page's own `DEFAULT_DENOMINATOR = 32` (`TemperatureToCelsius(t) = t / 32`), giving 1/32 °C = 0.03125 °C resolution. The connection token sits in the share page HTML (`window.MEATER.config`), so a plain HTTP GET is enough — no Playwright, no CDP.
+
+**Resolution is not accuracy.** MEATER specifies roughly ±0.5–1 °C, so the decimals sharpen *trends* — stall detection in particular, which compares small deltas across checks — rather than making absolute readings more correct. Alert thresholds are unchanged; only the reported values got finer. Status output is formatted to one decimal place.
+
+This is an undocumented internal interface and may change without notice, which is exactly why the scraper is retained as an automatic fallback. When the watcher falls back, its status message says so (`Quelle: Browser-Fallback (nur ganze Grad)`).
 
 ## Configuration
 
@@ -148,6 +167,9 @@ cp wachtmeater.toml.example wachtmeater.local.toml
 | `MEATER_URL` | MEATER Cloud cook URL to monitor | — (**required**) |
 | `BROWSER_CDP_URL` | CDP endpoint for headless Chrome | `http://chrome-kasmvnc.kasmvnc.svc.cluster.local:9222` |
 | `SCREENSHOT_DIR` | Directory for cook page screenshots | `/data` |
+| `SCREENSHOT_ENABLED` | Capture a cook-page screenshot. Set `false` to run fully browserless (no CDP needed on the happy path) | `true` |
+| `CLOUD_WS_ENABLED` | Prefer the MEATER Cloud WebSocket over page scraping | `true` |
+| `CLOUD_WS_TIMEOUT` | Seconds to wait for the share page and the first cook frame | `20.0` |
 | `STATE_FILE_DIR` | Directory for the JSON state file | `/data` |
 | `STATE_FILE_NAME` | State file name (auto-generated from cook UUID when empty) | `""` |
 | `CHECK_INTERVAL` | Seconds between periodic checks | `600` |
@@ -184,7 +206,7 @@ These set the initial values written into a fresh per-cook state file. Once the 
 | `ALERT_DEFAULT_RUHEPHASE_ENABLED` | Rest/cooldown alert | `false` |
 | `ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP` | Target cooldown temp (°C) | `0.0` |
 | `ALERT_DEFAULT_STALL_ENABLED` | Stall detection | `false` |
-| `ALERT_DEFAULT_STALL_MIN_DELTA` | Min internal-temp rise (°C) over the stall window | `1.0` |
+| `ALERT_DEFAULT_STALL_MIN_DELTA` | Min internal-temp rise (°C) over the stall window | `0.3` |
 | `ALERT_DEFAULT_WRAP_ENABLED` | One-shot wrap reminder | `false` |
 | `ALERT_DEFAULT_WRAP_TARGET_TEMP` | Internal temp (°C) at which to remind about wrapping | `0.0` |
 | `ALERT_DEFAULT_AMBIENT_RANGE_ENABLED` | Smoker too hot / too cold alert | `false` |
