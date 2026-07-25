@@ -77,8 +77,8 @@ Send these in the Matrix room the bot has joined (case-insensitive):
 | `status` | Fetch and post current MEATER status |
 | `enable tempdown` | Enable ambient temp drop alert (fire out detection) |
 | `disable tempdown` | Disable ambient temp drop alert |
-| `enable ruhephase <temp>` | Enable rest/cooldown alert at target temp (C) |
-| `disable ruhephase` | Disable rest/cooldown alert |
+| `enable ruhephase <temp>` | Enable rest/cooldown alert at target temp (C). Automatically disables `tempdown` — the cooldown is intended here and would otherwise trigger a false "fire is out" alarm. Re-arm with `enable tempdown` afterwards |
+| `disable ruhephase` | Disable rest/cooldown alert (does *not* restore `tempdown`) |
 | `enable stall [<delta>]` | Enable stall detection (optional: min rise in C) |
 | `disable stall` | Disable stall detection |
 | `enable wrap <temp>` | Enable wrap reminder at internal temp (C) |

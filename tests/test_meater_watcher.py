@@ -260,6 +260,28 @@ class TestHandleCommand:
         assert result is not None
 
     @patch.object(mw, "save_state")
+    def test_enable_ruhephase_disables_tempdown(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.tempalert_tempdown_enabled = True
+        result = mw.handle_command("enable ruhephase 55", base_state)
+        assert base_state.tempalert_tempdown_enabled is False
+        assert result is not None and "TempDown" in result
+
+    @patch.object(mw, "save_state")
+    def test_enable_ruhephase_tempdown_already_off(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.tempalert_tempdown_enabled = False
+        result = mw.handle_command("ruhephase an 55", base_state)
+        assert base_state.tempalert_ruhephase_enabled is True
+        assert base_state.tempalert_tempdown_enabled is False
+        # No coupling note when there was nothing to switch off.
+        assert result is not None and "TempDown" not in result
+
+    @patch.object(mw, "save_state")
+    def test_disable_ruhephase_leaves_tempdown_untouched(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.tempalert_tempdown_enabled = False
+        mw.handle_command("disable ruhephase", base_state)
+        assert base_state.tempalert_tempdown_enabled is False
+
+    @patch.object(mw, "save_state")
     def test_disable_ruhephase(self, _save: MagicMock, base_state: WatcherState) -> None:
         result = mw.handle_command("disable ruhephase", base_state)
         assert base_state.tempalert_ruhephase_enabled is False

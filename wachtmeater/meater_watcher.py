@@ -13,7 +13,11 @@ Supported Matrix commands (case-insensitive):
     - ``enable tempdown``           — Enable ambient temp drop alert (fire out).
     - ``disable tempdown``          — Disable ambient temp drop alert.
     - ``enable ruhephase <temp>``   — Enable rest/cooldown alert with target C.
-    - ``disable ruhephase``         — Disable rest/cooldown alert.
+      Automatically disables the tempdown alert, since the cooldown during the
+      rest phase is intended and would otherwise raise a false "fire is out"
+      alarm.  Re-arm tempdown manually afterwards.
+    - ``disable ruhephase``         — Disable rest/cooldown alert (does not
+      restore the tempdown alert).
     - ``enable stall [<min_delta>]``— Enable stall detection (optional: min
       rise in C over the stall window, default 1).
     - ``disable stall``             — Disable stall detection.
@@ -707,7 +711,7 @@ MEATER Watcher Befehle:
 status                    - Aktuellen Status abrufen
 enable tempdown           - Temperaturabfall-Alert AN
 disable tempdown          - Temperaturabfall-Alert AUS
-enable ruhephase <temp>   - Ruhephase-Alert AN (Zieltemp in C)
+enable ruhephase <temp>   - Ruhephase-Alert AN (Zieltemp in C; schaltet TempDown automatisch AUS)
 disable ruhephase         - Ruhephase-Alert AUS
 enable stall [<delta>]    - Stall-Erkennung AN (opt: min. Anstieg in C)
 disable stall             - Stall-Erkennung AUS
@@ -786,8 +790,31 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         target = float(m.group(1))
         state.tempalert_ruhephase_enabled = True
         state.ruhephase_target_temp = target
+        logger.info(f"Ruhephase-Alert aktiviert (Ziel-Abkuehltemperatur: {target} C).")
+        reply = f"Ruhephase-Alert aktiviert. Ziel-Abkuehltemperatur: {target} C"
+
+        # Coupling: in der Ruhephase kuehlt der Smoker gewollt ab.  Der
+        # TempDown-Alert wuerde das als "Feuer ausgegangen" werten und einen
+        # Fehlalarm samt Anruf ausloesen -> automatisch abschalten.
+        if state.tempalert_tempdown_enabled:
+            state.tempalert_tempdown_enabled = False
+            logger.info(
+                f"Kopplung: TempDown-Alert (Schwelle {AMBIENT_TEMP_DROP_THRESHOLD} C) "
+                f"automatisch deaktiviert, weil 'enable ruhephase {target}' das "
+                f"Abkuehlen zum Sollzustand macht - sonst Fehlalarm 'Feuer "
+                f"ausgegangen'. Reaktivierung nur manuell via 'enable tempdown'."
+            )
+            reply += (
+                f"\nKopplung: TempDown-Alert automatisch deaktiviert "
+                f"(Abkuehlen ist jetzt gewollt, Alarm haette ab "
+                f"{AMBIENT_TEMP_DROP_THRESHOLD} C Abfall vom Hoechstwert gefeuert). "
+                f"Nach der Ruhephase mit 'enable tempdown' wieder scharfschalten."
+            )
+        else:
+            logger.info("Kopplung: TempDown-Alert war bereits deaktiviert - keine Aenderung.")
+
         save_state(state)
-        return f"Ruhephase-Alert aktiviert. Ziel-Abkuehltemperatur: {target} C"
+        return reply
 
     if text in ("disable ruhephase", "ruhephase aus", "ruhephase off", "ruhephase disable"):
         state.tempalert_ruhephase_enabled = False
