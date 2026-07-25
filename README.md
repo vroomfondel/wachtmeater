@@ -161,6 +161,7 @@ cp wachtmeater.toml.example wachtmeater.local.toml
 | `MATRIX_PASSWORD` | Matrix bot password | — (**required**) |
 | `MATRIX_ROOM` | Default room ID or alias to join | `!exampleroom:matrix.example.com` |
 | `MATRIX_AUTO_CREATE_ROOM` | Auto-create an E2E-encrypted Matrix room per cook UUID | `false` |
+| `MATRIX_UPDATES_TO_BROADCAST_ROOM` | Whether cook updates also go to `MATRIX_ROOM` when a per-cook room exists (`false` = per-cook room only) | `true` |
 | `MATRIX_PITMASTER` | Matrix user ID to invite into auto-created rooms; also the only MXID allowed to issue `operator …` commands | `""` |
 | `MATRIX_OPERATOR_LISTENING_ROOM` | Room (`!id:srv` *or* `#alias:srv`) the operator listens in for `operator …` commands | `""` |
 | `CRYPTO_STORE_PATH` | Path for E2E encryption crypto store | `/data/crypto_store` |

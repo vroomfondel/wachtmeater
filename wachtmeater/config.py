@@ -353,6 +353,11 @@ class MatrixConfig(_EnvMixin):
             (``CRYPTO_STORE_PATH``).
         auto_create_room_for_meater_uuid: Whether to auto-create a room per
             cook UUID (``MATRIX_AUTO_CREATE_ROOM``).
+        updates_to_broadcast_room: Whether cook updates also go to the
+            configured broadcast room (``room``) when a per-cook room
+            exists.  When ``False`` the per-cook room is the only target;
+            has no effect if no per-cook room was created
+            (``MATRIX_UPDATES_TO_BROADCAST_ROOM``).
         pitmaster: Matrix user ID to invite into auto-created rooms; also
             the only MXID allowed to issue ``operator …`` commands
             (``MATRIX_PITMASTER``).
@@ -370,6 +375,7 @@ class MatrixConfig(_EnvMixin):
     password: str = env("MATRIX_PASSWORD", default="")
     crypto_store_path: str = env("CRYPTO_STORE_PATH", default="/data/crypto_store")
     auto_create_room_for_meater_uuid: bool = env("MATRIX_AUTO_CREATE_ROOM", default=False)
+    updates_to_broadcast_room: bool = env("MATRIX_UPDATES_TO_BROADCAST_ROOM", default=True)
     pitmaster: str = env("MATRIX_PITMASTER", default="")
     operator_listening_room: str = env("MATRIX_OPERATOR_LISTENING_ROOM", default="")
     operator_crypto_store_path: str = env("OPERATOR_CRYPTO_STORE_PATH", default="/data/operator_crypto_store")

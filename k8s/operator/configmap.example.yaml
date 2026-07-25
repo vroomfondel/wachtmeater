@@ -30,6 +30,9 @@ data:
     operator_listening_room = "#wachtmeater-ops:matrix.example.com"
     operator_crypto_store_path = "/data/operator_crypto_store"
     auto_create_room_for_meater_uuid = false
+    # false = Cook-Updates gehen nur in den Per-Cook-Raum, nicht zusaetzlich
+    # in "room" (wirkungslos ohne auto_create_room_for_meater_uuid)
+    updates_to_broadcast_room = false
     pitmaster         = "@pitmaster:matrix.example.com"
 
     [auth]

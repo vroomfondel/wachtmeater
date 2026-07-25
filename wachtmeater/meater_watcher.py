@@ -1044,7 +1044,13 @@ async def event_loop(
         state.matrix_room_id = selection.cook
         save_state(state)
 
-    room_ids = selection.all_rooms
+    # Update targets.  With a per-cook room present, the configured
+    # broadcast room is only included when explicitly enabled — otherwise
+    # the cook stays confined to its own room.
+    if selection.cook and not cfg.matrix.updates_to_broadcast_room:
+        room_ids = [selection.cook]
+    else:
+        room_ids = selection.all_rooms
 
     # Determine bot's MXID from the backend
     bot_mxid = messaging.get_bot_user_id()
@@ -1052,7 +1058,8 @@ async def event_loop(
     logger.info(f"Matrix: {len(messaging.get_rooms())} Raum/Raeume beigetreten")
     logger.info(
         f"Matrix: broadcasting an {len(room_ids)} Raum/Raeume "
-        f"(broadcast={selection.broadcast}, cook={selection.cook})"
+        f"(broadcast={selection.broadcast}, cook={selection.cook}, "
+        f"updates_to_broadcast_room={cfg.matrix.updates_to_broadcast_room})"
     )
 
     # Send startup greeting with available commands.  If the job created
@@ -1182,8 +1189,8 @@ async def event_loop(
                 if check_result == "__cook_ended__":
                     logger.warning("Cook-Ende erkannt im periodischen Check. Beende...")
                     try:
-                        # Notify all rooms
-                        for rid in messaging.get_rooms():
+                        # Notify the configured update targets
+                        for rid in room_ids if room_ids else messaging.get_rooms():
                             await messaging.send_message(
                                 rid,
                                 "Cook-Ende erkannt. MEATER Watcher wird beendet.",

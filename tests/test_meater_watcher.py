@@ -1070,3 +1070,64 @@ class TestStartupGreeting:
         first_call = mock_check.call_args_list[0]
         assert len(first_call.args) == 2  # (state, send_callback)
         assert callable(first_call.args[1])
+
+
+class TestUpdateRoomRouting:
+    """Tests which rooms cook updates are sent to."""
+
+    @staticmethod
+    def _run(*, updates_to_broadcast_room: bool, cook_room: str | None) -> list[str]:
+        """Run event_loop once and return the rooms a status update reached.
+
+        Args:
+            updates_to_broadcast_room: Value of the config flag under test.
+            cook_room: Per-cook room ID, or ``None`` for broadcast-only setups.
+
+        Returns:
+            Room IDs that received the ``STATUS`` update message.
+        """
+        from wachtmeater.messaging import RoomSelection
+
+        async def _stop_sync() -> None:
+            await asyncio.sleep(0.05)
+
+        mock_messaging = _make_mock_messaging(sync_side_effect=_stop_sync)
+        mock_messaging.get_or_create_room = AsyncMock(
+            return_value=RoomSelection(broadcast="!broadcast:test", cook=cook_room)
+        )
+
+        def _check(state: WatcherState, send: Any) -> str:
+            send("STATUS", None)
+            return "ok"
+
+        with (
+            patch.object(mw, "MEATER_URL", "https://meater.io/test-uuid"),
+            patch.object(mw, "load_state", return_value=WatcherState()),
+            patch.object(mw, "save_state"),
+            patch.object(mw, "call_pitmaster"),
+            patch.object(mw, "run_meater_check", side_effect=_check),
+            patch.object(mw, "cfg") as mock_cfg,
+        ):
+            mock_cfg.matrix.room = "!broadcast:test"
+            mock_cfg.matrix.auto_create_room_for_meater_uuid = cook_room is not None
+            mock_cfg.matrix.updates_to_broadcast_room = updates_to_broadcast_room
+            mock_cfg.matrix.pitmaster = ""
+
+            asyncio.run(mw.event_loop(skip_startup_test_call=True, messaging=mock_messaging))
+
+        return [c[0][0] for c in mock_messaging.send_message.call_args_list if c[0][1] == "STATUS"]
+
+    def test_updates_go_to_both_rooms_when_enabled(self) -> None:
+        """With the flag on, updates reach the broadcast room and the cook room."""
+        rooms = self._run(updates_to_broadcast_room=True, cook_room="!cook:test")
+        assert rooms == ["!broadcast:test", "!cook:test"]
+
+    def test_updates_stay_in_cook_room_when_disabled(self) -> None:
+        """With the flag off, the broadcast room is skipped."""
+        rooms = self._run(updates_to_broadcast_room=False, cook_room="!cook:test")
+        assert rooms == ["!cook:test"]
+
+    def test_flag_is_ignored_without_cook_room(self) -> None:
+        """Without a per-cook room the broadcast room stays the only target."""
+        rooms = self._run(updates_to_broadcast_room=False, cook_room=None)
+        assert rooms == ["!broadcast:test"]
