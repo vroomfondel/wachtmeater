@@ -77,3 +77,105 @@ class TestStartSyncResilience:
 
         assert adapter._stop_requested is True
         adapter._handler.stop_sync.assert_called_once()
+
+
+BOT = "@meater-watcher:matrix.example.com"
+PITMASTER = "@pit-claas-master:matrix.example.com"
+
+
+def _make_room_adapter() -> Any:
+    """Adapter stub whose bot MXID is fixed, for room-creation tests."""
+    adapter = _make_adapter()
+    adapter.get_bot_user_id = MagicMock(return_value=BOT)
+    return adapter
+
+
+class TestCookRoomPowerLevels:
+    """Tests for _cook_room_power_levels."""
+
+    def test_promotes_pitmaster_to_admin(self) -> None:
+        levels = _make_room_adapter()._cook_room_power_levels(PITMASTER, True)
+        assert levels == {"users": {BOT: 100, PITMASTER: 100}}
+
+    def test_bot_keeps_admin(self) -> None:
+        """The override replaces the default users map wholesale.
+
+        Omitting the bot would leave it at power level 0 in the room it just
+        created — unable to invite, set the topic, or repair the levels.
+        """
+        levels = _make_room_adapter()._cook_room_power_levels(PITMASTER, True)
+        assert levels is not None
+        assert levels["users"][BOT] == 100
+
+    def test_disabled_returns_none(self) -> None:
+        # None => homeserver applies its defaults (creator 100, others 0).
+        assert _make_room_adapter()._cook_room_power_levels(PITMASTER, False) is None
+
+    def test_no_pitmaster_returns_none(self) -> None:
+        assert _make_room_adapter()._cook_room_power_levels("", True) is None
+
+
+class TestGetOrCreateRoomPowerLevels:
+    """The power-level override must reach room_create — and only there."""
+
+    def _adapter_with_create(self) -> Any:
+        from nio import RoomCreateResponse
+
+        adapter = _make_room_adapter()
+        resp = MagicMock(spec=RoomCreateResponse)
+        resp.room_id = "!cook:test"
+        adapter._handler.client.room_create = AsyncMock(return_value=resp)
+        adapter._handler.client.join = AsyncMock()
+        return adapter
+
+    def test_admin_override_passed_to_room_create(self) -> None:
+        adapter = self._adapter_with_create()
+        asyncio.run(
+            adapter.get_or_create_room(
+                configured_room="",
+                auto_create=True,
+                meater_uuid="8d401460-fab1-478f-b95e-2f56fabe43e2",
+                pitmaster_mxid=PITMASTER,
+                persisted_room_id=None,
+                promote_pitmaster_to_admin=True,
+            )
+        )
+        kwargs = adapter._handler.client.room_create.call_args.kwargs
+        assert kwargs["power_level_override"] == {"users": {BOT: 100, PITMASTER: 100}}
+
+    def test_no_override_when_disabled(self) -> None:
+        adapter = self._adapter_with_create()
+        asyncio.run(
+            adapter.get_or_create_room(
+                configured_room="",
+                auto_create=True,
+                meater_uuid="8d401460-fab1-478f-b95e-2f56fabe43e2",
+                pitmaster_mxid=PITMASTER,
+                persisted_room_id=None,
+                promote_pitmaster_to_admin=False,
+            )
+        )
+        kwargs = adapter._handler.client.room_create.call_args.kwargs
+        assert kwargs["power_level_override"] is None
+
+    def test_rejoined_room_is_not_recreated(self) -> None:
+        """A persisted room is rejoined; its power levels stay untouched."""
+        from nio import JoinResponse
+
+        adapter = self._adapter_with_create()
+        join_resp = MagicMock(spec=JoinResponse)
+        join_resp.room_id = "!existing:test"
+        adapter._handler.client.join = AsyncMock(return_value=join_resp)
+
+        selection = asyncio.run(
+            adapter.get_or_create_room(
+                configured_room="",
+                auto_create=True,
+                meater_uuid="8d401460-fab1-478f-b95e-2f56fabe43e2",
+                pitmaster_mxid=PITMASTER,
+                persisted_room_id="!existing:test",
+                promote_pitmaster_to_admin=True,
+            )
+        )
+        assert selection.cook == "!existing:test"
+        adapter._handler.client.room_create.assert_not_called()

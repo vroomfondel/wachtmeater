@@ -62,6 +62,7 @@ Environment variable reference
     ``MATRIX_ROOM``, ``MATRIX_SERVER_ADDRESS``, ``MATRIX_USER``,
     ``MATRIX_HOMESERVER``, ``MATRIX_PASSWORD``, ``CRYPTO_STORE_PATH``,
     ``MATRIX_AUTO_CREATE_ROOM`` (``false``), ``MATRIX_PITMASTER``,
+    ``MATRIX_PITMASTER_ADMIN`` (``true``),
     ``MATRIX_OPERATOR_LISTENING_ROOM``,
     ``OPERATOR_CRYPTO_STORE_PATH`` (``/data/operator_crypto_store``).
 
@@ -374,6 +375,11 @@ class MatrixConfig(_EnvMixin):
         pitmaster: Matrix user ID to invite into auto-created rooms; also
             the only MXID allowed to issue ``operator …`` commands
             (``MATRIX_PITMASTER``).
+        pitmaster_admin_in_cook_room: Whether the pitmaster is granted admin
+            (power level 100) in the auto-created per-cook room, rather than
+            joining as a normal member (``MATRIX_PITMASTER_ADMIN``). Only
+            applies to rooms this bot creates itself; existing and configured
+            rooms are never modified.
         operator_listening_room: Room ID/alias the ``wachtmeater operator``
             listens in (``MATRIX_OPERATOR_LISTENING_ROOM``).
         operator_crypto_store_path: Separate crypto store for the operator
@@ -390,6 +396,7 @@ class MatrixConfig(_EnvMixin):
     auto_create_room_for_meater_uuid: bool = env("MATRIX_AUTO_CREATE_ROOM", default=False)
     updates_to_broadcast_room: bool = env("MATRIX_UPDATES_TO_BROADCAST_ROOM", default=True)
     pitmaster: str = env("MATRIX_PITMASTER", default="")
+    pitmaster_admin_in_cook_room: bool = env("MATRIX_PITMASTER_ADMIN", default=True)
     operator_listening_room: str = env("MATRIX_OPERATOR_LISTENING_ROOM", default="")
     operator_crypto_store_path: str = env("OPERATOR_CRYPTO_STORE_PATH", default="/data/operator_crypto_store")
 

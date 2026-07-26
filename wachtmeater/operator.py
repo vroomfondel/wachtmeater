@@ -286,6 +286,9 @@ async def event_loop() -> None:
         meater_uuid="",
         pitmaster_mxid=cfg.matrix.pitmaster,
         persisted_room_id=None,
+        # No room is created here (auto_create=False) — the operator only
+        # joins its pre-existing listening room, whose levels stay untouched.
+        promote_pitmaster_to_admin=False,
     )
     if not selection.broadcast:
         logger.error(f"Konnte operator-Room {cfg.matrix.operator_listening_room!r} nicht joinen")

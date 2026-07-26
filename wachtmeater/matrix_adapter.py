@@ -86,6 +86,7 @@ class MatrixMessagingAdapter:
         meater_uuid: str,
         pitmaster_mxid: str,
         persisted_room_id: str | None,
+        promote_pitmaster_to_admin: bool = True,
     ) -> RoomSelection:
         """Select, join, and/or create rooms.
 
@@ -105,6 +106,9 @@ class MatrixMessagingAdapter:
             meater_uuid: Cook UUID used in the room name and topic.
             pitmaster_mxid: Matrix user ID to invite into newly created rooms.
             persisted_room_id: Previously saved cook-room ID to rejoin.
+            promote_pitmaster_to_admin: Grant the pitmaster power level 100 in
+                a freshly created cook room. Only affects rooms created here —
+                a rejoined or configured room keeps whatever levels it has.
 
         Returns:
             A ``RoomSelection`` whose fields are the resolved room IDs
@@ -137,9 +141,14 @@ class MatrixMessagingAdapter:
                             "content": {"algorithm": "m.megolm.v1.aes-sha2"},
                         }
                     ],
+                    power_level_override=self._cook_room_power_levels(pitmaster_mxid, promote_pitmaster_to_admin),
                 )
                 if isinstance(resp, RoomCreateResponse):
                     cook_id = resp.room_id
+                    if promote_pitmaster_to_admin and pitmaster_mxid:
+                        MatrixMessagingAdapter.logger.info(
+                            f"Cook-Room {cook_id} erstellt — Pitmaster {pitmaster_mxid} als Admin (PL 100)."
+                        )
 
         # Avoid duplicate when a user accidentally configures the same room
         # as both broadcast and persisted cook room.
@@ -147,6 +156,33 @@ class MatrixMessagingAdapter:
             cook_id = None
 
         return RoomSelection(broadcast=broadcast_id, cook=cook_id)
+
+    def _cook_room_power_levels(
+        self, pitmaster_mxid: str, promote_pitmaster_to_admin: bool
+    ) -> dict[str, dict[str, int]] | None:
+        """Build the ``power_level_override`` for a freshly created cook room.
+
+        Returns ``None`` when nothing should be overridden, so the homeserver
+        applies its defaults (creator at 100, everyone else at 0).
+
+        The override is merged into the default ``m.room.power_levels``
+        content *per top-level key*, so supplying ``users`` REPLACES the
+        server's default ``{creator: 100}`` map wholesale rather than adding
+        to it.  The bot's own MXID must therefore be restated at 100 — omit it
+        and the bot ends up at power level 0 in the room it just created,
+        unable to invite, set topics, or ever fix the levels again.
+
+        Args:
+            pitmaster_mxid: Pitmaster user ID; empty means nobody to promote.
+            promote_pitmaster_to_admin: Whether to grant the pitmaster admin rights.
+
+        Returns:
+            A ``{"users": {mxid: level}}`` override, or ``None`` to keep the
+            server defaults.
+        """
+        if not (promote_pitmaster_to_admin and pitmaster_mxid):
+            return None
+        return {"users": {self.get_bot_user_id(): 100, pitmaster_mxid: 100}}
 
     async def _resolve_configured_room(self, spec: str) -> str | None:
         """Resolve a configured room spec (ID or alias) to a room ID.

@@ -1076,6 +1076,7 @@ async def event_loop(
         meater_uuid=MEATER_UUID,
         pitmaster_mxid=cfg.matrix.pitmaster,
         persisted_room_id=state.matrix_room_id,
+        promote_pitmaster_to_admin=cfg.matrix.pitmaster_admin_in_cook_room,
     )
     if selection.cook and selection.cook != state.matrix_room_id:
         state.matrix_room_id = selection.cook

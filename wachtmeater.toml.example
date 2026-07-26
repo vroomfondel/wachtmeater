@@ -60,6 +60,9 @@ homeserver     = "http://synapse.matrix.svc.cluster.local:8008"
 password       = "changeme"
 crypto_store_path = "/data/crypto_store"
 pitmaster = "@pit-claas-master:matrix.example.com"
+# Pitmaster im automatisch angelegten Cook-Raum zum Admin (PL 100) machen.
+# Wirkt nur bei neu erstellten Raeumen — bestehende bleiben unveraendert.
+pitmaster_admin_in_cook_room = true
 
 [auth]
 method              = "jwt"

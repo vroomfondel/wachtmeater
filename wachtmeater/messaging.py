@@ -53,6 +53,7 @@ class MessagingBackend(Protocol):
         meater_uuid: str,
         pitmaster_mxid: str,
         persisted_room_id: str | None,
+        promote_pitmaster_to_admin: bool = True,
     ) -> RoomSelection:
         """Select, join, and/or create the broadcast and cook rooms.
 
@@ -60,6 +61,8 @@ class MessagingBackend(Protocol):
         alias (``#alias:srv``); aliases are resolved to IDs via the join
         response.  *auto_create* controls whether a per-cook room is
         rejoined or freshly created in addition.
+        *promote_pitmaster_to_admin* grants the pitmaster admin rights in a
+        freshly created cook room.
         """
         ...
 
