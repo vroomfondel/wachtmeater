@@ -93,7 +93,7 @@ status                    - Aktuellen Status abrufen
 eta                       - Nur Restzeit/Prognosen abrufen (MEATER-Restzeit, Watcher-Trend, Endphase)
 enable tempdown           - Temperaturabfall-Alert AN
 disable tempdown          - Temperaturabfall-Alert AUS
-enable ruhephase <temp>   - Ruhephase-Alert AN (Zieltemp in C; schaltet TempDown automatisch AUS)
+enable ruhephase <temp>   - Ruhephase-Alert AN (Zieltemp in C; schaltet TempDown automatisch AUS, Wrap-Reminder stumm)
 disable ruhephase         - Ruhephase-Alert AUS
 enable stall [<rate>]     - Stall-Erkennung AN (opt: Schwelle in C/h, Standard {cfg.alerts.stall_max_rate:g}; Alarm wenn der Kern
                             ueber {STALL_WINDOW_MINUTES} Min. langsamer steigt, nur bei {STALL_CORE_MIN:g}-{STALL_CORE_MAX:g} C,

@@ -81,6 +81,14 @@ class TestAlertSummary:
         lines = status_text.alert_summary(base_state)
         assert any("Wrap-Reminder: AN" in l and "75" in l for l in lines)
 
+    def test_wrap_muted_in_restphase(self, base_state: WatcherState) -> None:
+        base_state.tempalert_wrap_enabled = True
+        base_state.wrap_target_temp = 75.0
+        base_state.tempalert_ruhephase_enabled = True
+        base_state.ruhephase_target_temp = 65.0
+        lines = status_text.alert_summary(base_state)
+        assert any("Wrap-Reminder: AN" in l and "stumm in der Ruhephase" in l for l in lines)
+
     def test_wrap_already_alerted(self, base_state: WatcherState) -> None:
         base_state.tempalert_wrap_enabled = True
         base_state.wrap_target_temp = 75.0
@@ -1252,6 +1260,18 @@ class TestRunMeaterCheck:
         send = MagicMock()
         self._run_with_send(cooking_state, send, ambient_temp_c=110)
         assert any(t.startswith("ACHTUNG") for t in self._texts(send))
+
+    def test_wrap_reminder_muted_in_restphase(self, base_state: WatcherState) -> None:
+        # Brisket in the box at 91 C: no "wrap now" call
+        base_state.tempalert_wrap_enabled = True
+        base_state.wrap_target_temp = 75.0
+        base_state.tempalert_ruhephase_enabled = True
+        base_state.ruhephase_target_temp = 65.0
+        send = MagicMock()
+        _, mock_call = self._run_with_send(base_state, send, internal_temp_c=91.1)
+        assert not any("Wrap-Reminder!" in t for t in self._texts(send))
+        mock_call.assert_not_called()
+        assert base_state.wrap_alerted is False
 
     def test_tempdown_muted_during_pause(self, cooking_state: WatcherState) -> None:
         cooking_state.max_ambient_temp = 130.0

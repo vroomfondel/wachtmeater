@@ -311,6 +311,8 @@ def alert_summary(state: WatcherState) -> list[str]:
         s = f"Wrap-Reminder: AN (bei {state.wrap_target_temp} C)"
         if state.wrap_alerted:
             s += " [bereits ausgeloest]"
+        elif state.tempalert_ruhephase_enabled:
+            s += " [stumm in der Ruhephase]"
         lines.append(s)
     else:
         lines.append("Wrap-Reminder: AUS")

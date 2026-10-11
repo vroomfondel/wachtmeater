@@ -401,8 +401,14 @@ def run_meater_check(
                 if deliver_once(state, "stall", f"STALL ERKANNT: {alarm_msg}", send, call_text=alarm_msg):
                     state.stall_alerted = True
 
-    # 4) Wrap reminder
-    if state.tempalert_wrap_enabled and state.wrap_target_temp is not None and not state.wrap_alerted:
+    # 4) Wrap reminder — muted in the rest phase: the meat is off the smoker,
+    #    and the core is far above the wrap temperature.
+    if (
+        state.tempalert_wrap_enabled
+        and state.wrap_target_temp is not None
+        and not state.wrap_alerted
+        and not state.tempalert_ruhephase_enabled
+    ):
         wrap_temp = state.wrap_target_temp
         if current_internal is not None and current_internal >= wrap_temp:
             alarm_msg = (
