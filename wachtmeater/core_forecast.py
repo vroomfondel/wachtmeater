@@ -86,6 +86,11 @@ _C_BOUNDS_FREE: tuple[float, float] = (1e-3, 5.0)
 """Bounds for ``c`` [1/h] in the free fit (as in the note's script)."""
 _FREE_A_MARGIN: float = 0.1
 
+MAX_ETA_HOURS: float = 24.0
+"""ETAs further out than this are shown as "nicht absehbar".  A (nearly) flat
+window gives a tiny ``c`` or slope and an ETA years ahead — e.g. the core
+standing at 93 C for an hour on 02.05. — which is meaningless."""
+
 DEFAULT_SEARCH_STEP_S: float = 600.0
 """Step between candidate fit starts for ``find_endphase_start``."""
 DEFAULT_MIN_SPAN_S: float = 3600.0
@@ -687,6 +692,10 @@ def format_report(fc: Forecast) -> str:
     """
 
     def _hm(hours: float | None) -> str:
+        if hours is None:
+            return "nie (A <= Ziel)"
+        if hours > MAX_ETA_HOURS:
+            return "nicht absehbar (Kern steigt kaum)"
         eta = fc.eta(hours)
         return eta.strftime("%H:%M") if eta else "nie (A <= Ziel)"
 
@@ -695,7 +704,9 @@ def format_report(fc: Forecast) -> str:
         f"Fit {datetime.fromtimestamp(fc.start):%H:%M}–{datetime.fromtimestamp(fc.now):%H:%M} "
         f"({fc.points} Punkte): Kern {fc.core_start:.1f}→{fc.core_now:.1f} °C, "
         f"{ambient}Pit {fc.pit:.0f} °C, Ziel {fc.target} °C",
-        f"linear      : {fc.linear.rate:.2f} °C/h  -> {_hm(fc.linear.eta_hours)}  (früheste Ankunft)",
+        f"linear      : {fc.linear.rate:.2f} °C/h  -> "
+        f"{_hm(fc.linear.eta_hours) if fc.linear.eta_hours is not None else 'nicht absehbar (kein Anstieg)'}"
+        f"  (früheste Ankunft)",
     ]
     for f in fc.fixed:
         tag = "  <- A = Pit (schnellste Exp.-Variante)" if f.ambient == fc.pit else ""

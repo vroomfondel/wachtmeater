@@ -76,7 +76,7 @@ Send these in the Matrix room the bot has joined (case-insensitive):
 | Command | Description |
 |---|---|
 | `status` | Fetch and post current MEATER status |
-| `enable tempdown` | Enable ambient temp drop alert (fire out detection) |
+| `enable tempdown` | Enable ambient temp drop alert (fire out detection). The ambient high-water mark is only tracked once the core reaches `TEMPDOWN_WARMUP_CORE_TEMP` (40 °C), so warm-up overshoots do not count |
 | `disable tempdown` | Disable ambient temp drop alert |
 | `enable ruhephase <temp>` | Enable rest/cooldown alert at target temp (C). Automatically disables `tempdown` — the cooldown is intended here and would otherwise trigger a false "fire is out" alarm. Re-arm with `enable tempdown` afterwards |
 | `disable ruhephase` | Disable rest/cooldown alert (does *not* restore `tempdown`) |
@@ -190,6 +190,7 @@ cp wachtmeater.toml.example wachtmeater.local.toml
 | `PAUSE_DEFAULT_MINUTES` | Default duration of `pause` / `wrapped` | `20` |
 | `FORECAST_WINDOW_MINUTES` | Window for the watcher's own linear ETA forecast to the pull target | `60` |
 | `PIT_TEMP` | Real smoker temperature (°C) for the end-phase forecast, overridable per cook via `set pit` | `110.0` |
+| `TEMPDOWN_WARMUP_CORE_TEMP` | Core temperature (°C) from which the ambient high-water mark for `tempdown` is tracked — warm-up overshoots below it are ignored. `0` = track from the first reading | `40.0` |
 | `ENDPHASE_SETTLE_MINUTES` | Earliest end-phase fit start after `wrapped` (lower bound; the actual start is searched adaptively) | `60` |
 | `ENDPHASE_SEARCH_STEP_MINUTES` | Step between candidate fit starts in the adaptive search | `10` |
 | `ENDPHASE_STABLE_RMS` | Free-fit RMS (°C) up to which a window counts as steady end phase | `0.1` |

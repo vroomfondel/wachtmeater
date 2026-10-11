@@ -76,7 +76,7 @@ from loguru import logger
 
 from wachtmeater import cfg, read_dot_env_to_environ
 from wachtmeater.config import AlertDefaultsConfig, WatcherState
-from wachtmeater.core_forecast import Reading, find_endphase_start, is_stable, thin
+from wachtmeater.core_forecast import MAX_ETA_HOURS, Reading, find_endphase_start, is_stable, thin
 from wachtmeater.core_forecast import forecast as core_forecast
 from wachtmeater.messaging import MessagingBackend
 
@@ -134,6 +134,11 @@ STALL_CORE_MAX: float = cfg.monitoring.stall_core_max
 STALL_DISTURBANCE_AMBIENT_DROP: float = cfg.monitoring.stall_disturbance_ambient_drop
 STALL_DISTURBANCE_CORE_DROP: float = cfg.monitoring.stall_disturbance_core_drop
 STALL_DISTURBANCE_PAUSE_CHECKS: int = cfg.monitoring.stall_disturbance_pause_checks
+
+# TempDown: max ambient is only tracked from this core temperature on, so
+# warm-up overshoots (e.g. 117 C at core 26 C, then ~105 C) do not trip the
+# alert for hours.  0 = track from the first reading.
+TEMPDOWN_WARMUP_CORE_TEMP: float = cfg.monitoring.tempdown_warmup_core_temp
 
 # ``pause`` / ``wrapped`` default duration
 PAUSE_DEFAULT_MINUTES: int = cfg.monitoring.pause_default_minutes
@@ -639,7 +644,11 @@ def _endphase_lines(state: WatcherState, now: float, current_internal: float | N
         ]
 
     def _eta(hours: float | None, ref: float) -> str:
-        return f"~{_clock(ref + hours * 3600, now)}" if hours is not None else "nie (A <= Ziel)"
+        if hours is None:
+            return "nie (A <= Ziel)"
+        if hours > MAX_ETA_HOURS:
+            return "nicht absehbar (Kern steigt kaum)"
+        return f"~{_clock(ref + hours * 3600, now)}"
 
     fit_start = find_endphase_start(
         readings,
@@ -666,14 +675,18 @@ def _endphase_lines(state: WatcherState, now: float, current_internal: float | N
             f"Endphasen-Prognose: noch kein stabiler Fit seit {_clock(earliest, now)} "
             f"(Anstieg noch nicht gleichmaessig)"
         ]
+        # Preliminary over the latest data: A=pit as lower bound, A=100 C as
+        # likely value — across five cooks the free fit put A at 96.5-98.5 C
+        # (foil caps the surface near boiling), and in the backtest A=100 C
+        # was the best estimate available before the fit turns stable.
         recent = thin([r for r in readings if r[0] >= readings[-1][0] - min_span], ENDPHASE_MAX_POINTS)
-        prelim = core_forecast(recent, target=target, pit=pit, fixed_ambients=())
-        pit_fit = next((f for f in prelim.fixed if f.ambient == pit), None)
-        if pit_fit is not None:
-            lines.append(
-                f"  vorlaeufig A=Pit {pit:g} C (frueheste, letzte {ENDPHASE_MIN_MINUTES} Min.): "
-                f"{_eta(pit_fit.eta_hours, prelim.now)}"
-            )
+        prelim = core_forecast(recent, target=target, pit=pit, fixed_ambients=(ENDPHASE_FOIL_CAP,))
+        for f in prelim.fixed:
+            if f.ambient == pit:
+                label = f"frueheste (A=Pit {pit:g} C)"
+            else:
+                label = f"wahrscheinlich bei Folie (A={f.ambient:g} C)"
+            lines.append(f"  vorlaeufig, letzte {ENDPHASE_MIN_MINUTES} Min. — {label}: {_eta(f.eta_hours, prelim.now)}")
         return lines
 
     lines = [
@@ -715,10 +728,10 @@ def _forecast_line(state: WatcherState, now: float, current_internal: float | No
     rate = _slope_per_hour(pts)
     if rate < 0.1:
         return None
-    eta = datetime.fromtimestamp(now + (target - current_internal) / rate * 3600)
-    fmt = "%H:%M" if eta.date() == datetime.fromtimestamp(now).date() else "%d.%m. %H:%M"
     span = round((pts[-1][0] - pts[0][0]) / 60)
-    return f"Watcher-Prognose bis {target:.1f} C: ~{eta.strftime(fmt)} (Trend {rate:.1f} C/h ueber {span} Min.)"
+    hours = (target - current_internal) / rate
+    when = "nicht absehbar (Kern steigt kaum)" if hours > MAX_ETA_HOURS else f"~{_clock(now + hours * 3600, now)}"
+    return f"Watcher-Prognose bis {target:.1f} C: {when} (Trend {rate:.1f} C/h ueber {span} Min.)"
 
 
 # ---------------------------------------------------------------------------
@@ -980,9 +993,12 @@ def run_meater_check(
     cook_name = data.get("cook_name", "Unknown")
     screenshot: str = data.get("screenshot") or f"/data/meater-screenshot-{MEATER_UUID}.png"
     paused = state.pause_until is not None
+    # Warm-up: until the core reaches TEMPDOWN_WARMUP_CORE_TEMP the ambient
+    # high-water mark is neither tracked nor checked.
+    warming_up = current_internal is not None and current_internal < TEMPDOWN_WARMUP_CORE_TEMP
 
     # Update max values
-    if current_ambient is not None:
+    if current_ambient is not None and not warming_up:
         if max_ambient is None or current_ambient > max_ambient:
             max_ambient = current_ambient
     if current_internal is not None:
@@ -1020,7 +1036,9 @@ def run_meater_check(
         lines.append(f"Target: {meater_target} (MEATER) → Pull bei {state.target_override:.1f} C (aktiv)")
     elif target_temp is not None:
         lines.append(f"Target: {target_temp:.1f} C")
-    if max_ambient is not None:
+    if warming_up:
+        lines.append(f"Max Ambient: Anheizphase, erfasst ab Kern {TEMPDOWN_WARMUP_CORE_TEMP:g} C")
+    elif max_ambient is not None:
         lines.append(f"Max Ambient: {max_ambient:.1f} C")
     if max_internal is not None:
         lines.append(f"Max Internal: {max_internal:.1f} C")
@@ -1061,7 +1079,7 @@ def run_meater_check(
 
     # 1) Ambient temperature drop (tempdown / fire out) — repeats every check
     #    while the drop persists; muted during ``pause``.
-    if state.tempalert_tempdown_enabled and not paused:
+    if state.tempalert_tempdown_enabled and not paused and not warming_up:
         if max_ambient is not None and current_ambient is not None:
             ambient_drop = max_ambient - current_ambient
             if ambient_drop >= AMBIENT_TEMP_DROP_THRESHOLD:
@@ -1230,7 +1248,7 @@ def run_meater_check(
     # that (or that it was never set) — in both cases the current reading is the
     # correct new maximum, so don't write the stale snapshot back.
     if state.max_ambient_temp is None:
-        max_ambient = current_ambient
+        max_ambient = None if warming_up else current_ambient
 
     state.last_internal_temp = current_internal
     state.last_ambient_temp = current_ambient

@@ -202,6 +202,12 @@ def test_find_endphase_start_caps_candidates() -> None:
     assert calls <= cf.DEFAULT_MAX_CANDIDATES + 1
 
 
+def test_report_caps_far_etas() -> None:
+    flat = [(i * 600.0, 93.0, None) for i in range(7)]
+    report = cf.format_report(cf.forecast(flat, target=94.0, pit=110.0))
+    assert "nicht absehbar" in report
+
+
 def test_cli_eta_parser() -> None:
     args = build_parser().parse_args(["eta", "x.zip", "--pit", "120", "--since", "08:00"])
     assert (args.command, args.export, args.pit, args.target, args.since) == ("eta", "x.zip", 120.0, 96.5, "08:00")

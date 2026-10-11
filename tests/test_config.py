@@ -75,6 +75,7 @@ class TestFromEnvironUsesDefaults:
             "STALL_DISTURBANCE_PAUSE_CHECKS",
             "PAUSE_DEFAULT_MINUTES",
             "PIT_TEMP",
+            "TEMPDOWN_WARMUP_CORE_TEMP",
             "ENDPHASE_SETTLE_MINUTES",
             "ENDPHASE_MIN_MINUTES",
             "ENDPHASE_SEARCH_STEP_MINUTES",
@@ -90,6 +91,7 @@ class TestFromEnvironUsesDefaults:
         assert cfg.stall_disturbance_pause_checks == 2
         assert cfg.pause_default_minutes == 20
         assert cfg.pit_temp == 110.0
+        assert cfg.tempdown_warmup_core_temp == 40.0
         assert cfg.endphase_settle_minutes == 60
         assert cfg.endphase_search_step_minutes == 10
         assert cfg.endphase_stable_rms == 0.1

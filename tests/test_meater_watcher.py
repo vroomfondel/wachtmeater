@@ -1246,6 +1246,43 @@ class TestRunMeaterCheck:
         result, _ = self._run_with_send(base_state, MagicMock(), target_temp_c=98)
         assert "Target: 98.0 C\n" in result
 
+    def test_warmup_spike_ignored_for_tempdown(self, base_state: WatcherState) -> None:
+        # 26.09.: ambient overshoots to 117 C at core 26 C, settles at ~105 C.
+        send = MagicMock()
+        _, mock_call = self._run_with_send(base_state, send, internal_temp_c=25.7, ambient_temp_c=117.1)
+        assert base_state.max_ambient_temp is None
+        _, mock_call = self._run_with_send(base_state, send, internal_temp_c=41.0, ambient_temp_c=105.0)
+        assert _field(base_state, "max_ambient_temp") == 105.0
+        assert not any("ACHTUNG" in t for t in self._texts(send))
+        mock_call.assert_not_called()
+
+    def test_tempdown_still_fires_after_warmup(self, base_state: WatcherState) -> None:
+        send = MagicMock()
+        self._run_with_send(base_state, send, internal_temp_c=45.0, ambient_temp_c=110.0)
+        _, mock_call = self._run_with_send(base_state, send, internal_temp_c=46.0, ambient_temp_c=95.0)
+        assert any(t.startswith("ACHTUNG") for t in self._texts(send))
+        mock_call.assert_called_once()
+
+    def test_warmup_disabled_tracks_from_first_reading(self, base_state: WatcherState) -> None:
+        with patch.object(mw, "TEMPDOWN_WARMUP_CORE_TEMP", 0.0):
+            self._run_with_send(base_state, MagicMock(), internal_temp_c=20.0, ambient_temp_c=117.0)
+        assert base_state.max_ambient_temp == 117.0
+
+    def test_linear_forecast_capped(self, base_state: WatcherState) -> None:
+        # 0.12 C/h over the last hour, 6 C to go -> 50 h -> "nicht absehbar"
+        base_state.internal_samples = [[1_000_000.0 + i * 600, 90.0 + 0.02 * i] for i in range(7)]
+        line = mw._forecast_line(base_state, 1_000_000.0 + 3600, 90.12, 96.0)
+        assert line is not None and "nicht absehbar" in line
+
+    def test_endphase_flat_window_capped(self, base_state: WatcherState) -> None:
+        # 02.05.: core stood at 93 C for an hour -> ETA years ahead before the fix
+        t0 = 1_000_000.0
+        base_state.wrapped_at = t0 - 3 * 3600
+        base_state.internal_samples = [[t0 - 2 * 3600 + i * 600, 92.0 if i < 6 else 93.0] for i in range(13)]
+        lines = mw._endphase_lines(base_state, t0, 93.0, 94.0)
+        assert lines[0].startswith("Endphasen-Prognose: noch kein stabiler Fit")
+        assert all("nicht absehbar" in l for l in lines[1:])
+
     def test_resets_consecutive_errors_on_success(self, base_state: WatcherState) -> None:
         base_state.consecutive_errors = 2
         data = self._make_data()

@@ -262,7 +262,8 @@ def test_endphase_forecast_after_wrapped() -> None:
     assert _endphase(r.status[44])[0].startswith("Endphasen-Prognose: sammelt Daten")
     early = _endphase(r.status[55])
     assert early[0].startswith("Endphasen-Prognose: noch kein stabiler Fit")
-    assert "vorlaeufig A=Pit 110 C" in early[1]
+    assert "frueheste (A=Pit 110 C)" in early[1]
+    assert "wahrscheinlich bei Folie (A=100 C)" in early[2]
     block = _endphase(r.status[len(CORE) - 1])
     assert block[0].startswith("Endphasen-Prognose bis 96.0 C (Fit ")
     assert "Pit 110 C" in block[0]  # config default
@@ -293,3 +294,12 @@ def test_set_pit_changes_endphase_forecast() -> None:
     assert "Pit 130 C" in block[0]
     assert any("A=Pit 130 C" in l for l in block)
     assert block != _endphase(base.status[len(CORE) - 1])
+
+
+def test_warmup_overshoot_does_not_count_for_tempdown() -> None:
+    # The real series starts at core 14.3 C: max ambient is only tracked from
+    # core 40 C on (idx 6, ambient 90.8 C), not from the 82 C warm-up start.
+    r = Replay()
+    r.run(7)
+    assert "Max Ambient: Anheizphase" in r.status[5]
+    assert r.state.max_ambient_temp == 90.8

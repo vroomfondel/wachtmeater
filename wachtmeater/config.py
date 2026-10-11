@@ -61,6 +61,7 @@ Environment variable reference
     ``PAUSE_DEFAULT_MINUTES`` (``20``),
     ``FORECAST_WINDOW_MINUTES`` (``60``),
     ``PIT_TEMP`` (``110.0``),
+    ``TEMPDOWN_WARMUP_CORE_TEMP`` (``40.0``),
     ``ENDPHASE_SETTLE_MINUTES`` (``60``),
     ``ENDPHASE_MIN_MINUTES`` (``60``),
     ``ENDPHASE_SEARCH_STEP_MINUTES`` (``10``),
@@ -355,6 +356,10 @@ class MonitoringConfig(_EnvMixin):
             ``wrapped`` command (``PAUSE_DEFAULT_MINUTES``).
         forecast_window_minutes: Time window for the watcher's own linear
             ETA forecast to the pull target (``FORECAST_WINDOW_MINUTES``).
+        tempdown_warmup_core_temp: Core temperature in C from which the
+            ambient high-water mark for the TempDown alert is tracked;
+            below it (warm-up) ambient overshoots are ignored.  ``0``
+            tracks from the first reading (``TEMPDOWN_WARMUP_CORE_TEMP``).
         pit_temp: Real smoker temperature in C — upper bound for the
             effective surface temperature ``A`` of the end-phase forecast;
             overridable per cook via ``set pit`` (``PIT_TEMP``).
@@ -394,6 +399,7 @@ class MonitoringConfig(_EnvMixin):
     pause_default_minutes: int = env("PAUSE_DEFAULT_MINUTES", default=20)
     forecast_window_minutes: int = env("FORECAST_WINDOW_MINUTES", default=60)
     pit_temp: float = env("PIT_TEMP", default=110.0)
+    tempdown_warmup_core_temp: float = env("TEMPDOWN_WARMUP_CORE_TEMP", default=40.0)
     endphase_settle_minutes: int = env("ENDPHASE_SETTLE_MINUTES", default=60)
     endphase_min_minutes: int = env("ENDPHASE_MIN_MINUTES", default=60)
     endphase_search_step_minutes: int = env("ENDPHASE_SEARCH_STEP_MINUTES", default=10)
