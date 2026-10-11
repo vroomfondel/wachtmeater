@@ -264,7 +264,7 @@ def test_endphase_forecast_after_wrapped() -> None:
     block = _endphase(r.status[len(CORE) - 1])
     assert len(block) == 1
     assert block[0].startswith("Endphasen-Prognose bis 96.0 C (A=Pit 110 C, Fit 06:33-10:13, 23 Punkte")
-    assert block[0].endswith("~13:17")
+    assert block[0].endswith("~13:40")
     assert r.state.wrapped_at is not None
     assert r.state.internal_samples[0][0] <= r.state.wrapped_at + 60 * 60 + 600
 

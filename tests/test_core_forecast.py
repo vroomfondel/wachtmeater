@@ -1,9 +1,10 @@
 """Tests for wachtmeater/core_forecast.py.
 
 Reference data: end phase of brisket cook 15f2e6f5 (11.10.2026, 08:01–10:25,
-exact timestamps from the Element export).  Expected values are the scipy
-``curve_fit`` results from the Obsidian note "Kerntemperatur-Prognose
-(Endphase)".
+exact timestamps from the Element export).  Expected values are scipy
+``curve_fit`` results with ``A``, ``T0`` and ``c`` free (the Obsidian note
+"Kerntemperatur-Prognose (Endphase)" pinned ``T0`` to the first reading and
+got e.g. ``A=98.5±1.8``).
 """
 
 import json
@@ -40,6 +41,13 @@ READINGS: list[cf.Reading] = [(ts / 1000, k, a) for ts, k, a in ENDPHASE]
 
 @pytest.fixture(scope="module")
 def fc() -> cf.Forecast:
+    # Plain least squares: must reproduce the scipy curve_fit reference values.
+    return cf.forecast(READINGS, target=96.5, pit=110.0, loss="linear")
+
+
+@pytest.fixture(scope="module")
+def fc_robust() -> cf.Forecast:
+    # Default: Huber loss.
     return cf.forecast(READINGS, target=96.5, pit=110.0)
 
 
@@ -57,10 +65,10 @@ def test_linear_is_earliest_arrival(fc: cf.Forecast) -> None:
 @pytest.mark.parametrize(
     ("ambient", "c", "rms", "eta"),
     [
-        (110.0, 0.092, 0.091, "14:49"),
-        (104.0, 0.124, 0.078, "15:34"),
-        (102.0, 0.141, 0.073, "16:05"),
-        (100.0, 0.162, 0.069, "17:01"),
+        (110.0, 0.088, 0.061, "14:59"),
+        (104.0, 0.121, 0.058, "15:43"),
+        (102.0, 0.137, 0.058, "16:14"),
+        (100.0, 0.159, 0.059, "17:09"),
     ],
 )
 def test_fixed_ambient_matches_note(fc: cf.Forecast, ambient: float, c: float, rms: float, eta: str) -> None:
@@ -80,10 +88,10 @@ def test_pit_variant_first_and_fastest(fc: cf.Forecast) -> None:
 def test_free_fit_matches_note(fc: cf.Forecast) -> None:
     assert fc.free is not None
     assert fc.free.fixed is False
-    assert fc.free.ambient == pytest.approx(98.5, abs=0.05)
-    assert fc.free.ambient_stderr == pytest.approx(1.8, abs=0.05)
-    assert fc.free.c == pytest.approx(0.183, abs=0.0005)
-    assert _hm(fc, fc.free.eta_hours) == "18:26"
+    assert fc.free.ambient == pytest.approx(102.45, abs=0.05)
+    assert fc.free.ambient_stderr == pytest.approx(3.88, abs=0.05)
+    assert fc.free.c == pytest.approx(0.133, abs=0.0005)
+    assert _hm(fc, fc.free.eta_hours) == "16:05"
 
 
 def test_report_format(fc: cf.Forecast) -> None:
@@ -91,8 +99,40 @@ def test_report_format(fc: cf.Forecast) -> None:
     assert report.splitlines()[0] == (
         "Fit 08:01–10:25 (15 Punkte): Kern 84.9→89.8 °C, MEATER-Ambient Ø 103.8 °C, Pit 110 °C, Ziel 96.5 °C"
     )
-    assert "A=110.0 °C : c=0.092/h rms=0.091 -> 14:49  <- A = Pit (schnellste Exp.-Variante)" in report
-    assert "A frei (≤Pit): A=98.5±1.8 °C c=0.183/h -> 18:26" in report
+    assert "A=110.0 °C : c=0.088/h rms=0.061 -> 14:59  <- A = Pit (schnellste Exp.-Variante)" in report
+    assert "A frei (≤Pit): A=102.5±3.9 °C c=0.133/h -> 16:05" in report
+
+
+def _with_glitch(idx: int, delta: float = -1.0) -> list[cf.Reading]:
+    r = READINGS[idx]
+    return [*READINGS[:idx], (r[0], r[1] + delta, r[2]), *READINGS[idx + 1 :]]
+
+
+def test_robust_fit_matches_plain_fit_on_clean_data(fc: cf.Forecast, fc_robust: cf.Forecast) -> None:
+    for plain, robust in zip(fc.fixed, fc_robust.fixed):
+        assert plain.eta_hours is not None and robust.eta_hours is not None
+        assert abs(robust.eta_hours - plain.eta_hours) * 60 < 3
+    assert fc_robust.free is not None and fc.free is not None
+    assert fc_robust.free.ambient == pytest.approx(fc.free.ambient, abs=0.5)
+
+
+@pytest.mark.parametrize(("loss", "limit"), [("linear", 35), ("huber", 5)])
+def test_first_reading_outlier_barely_shifts_eta(loss: cf.Loss, limit: float) -> None:
+    # T0 is fitted, not pinned to the first reading: a -1 C glitch there moved
+    # the ETA by ~56 (A=Pit) / ~82 (A=100) minutes when T0 was pinned, ~19 /
+    # ~29 with plain least squares and 0-3 with the Huber loss.
+    good = cf.forecast(READINGS, target=96.5, pit=110.0, loss=loss)
+    bad = cf.forecast(_with_glitch(0), target=96.5, pit=110.0, loss=loss)
+    for good_fit, bad_fit in ((good.fixed[0], bad.fixed[0]), (good.fixed[3], bad.fixed[3])):
+        assert good_fit.eta_hours is not None and bad_fit.eta_hours is not None
+        assert abs(bad_fit.eta_hours - good_fit.eta_hours) * 60 < limit
+
+
+def test_robust_fit_ignores_mid_window_glitch(fc_robust: cf.Forecast) -> None:
+    bad = cf.forecast(_with_glitch(7, -2.0), target=96.5, pit=110.0)
+    for good_fit, bad_fit in zip(fc_robust.fixed, bad.fixed):
+        assert good_fit.eta_hours is not None and bad_fit.eta_hours is not None
+        assert abs(bad_fit.eta_hours - good_fit.eta_hours) * 60 < 3
 
 
 def test_fixed_ambients_not_above_target_are_skipped() -> None:
@@ -161,8 +201,9 @@ def test_readings_from_export_without_status_raises(tmp_path: Path) -> None:
         readings_from_element_export(path)
 
 
-def test_is_stable_on_note_window(fc: cf.Forecast) -> None:
-    assert cf.is_stable(fc)  # 08:01-10:25: A=98.5±1.8, RMS 0.067
+def test_is_stable_on_note_window(fc: cf.Forecast, fc_robust: cf.Forecast) -> None:
+    assert cf.is_stable(fc)  # 08:01-10:25: A=102.5±3.9, RMS 0.058
+    assert cf.is_stable(fc_robust)  # A=102.3±4.5
 
 
 def _transient_lead() -> list[cf.Reading]:

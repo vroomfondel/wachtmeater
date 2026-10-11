@@ -157,7 +157,7 @@ This is an undocumented internal interface and may change without notice, which 
 
 ## End-phase forecast
 
-After `wrapped`, the watcher fits the end phase of the cook with Newton's law of heating, `T(t) = A - (A - T0)·e^(-c·t)`, using its own core readings. `A` is the real smoker temperature (`set pit`, default 110 °C), the fit starts `ENDPHASE_SETTLE_MINUTES` after the wrap; `c` and the start value `T0` are fitted (fitting `T0` instead of anchoring it at the first reading keeps one noisy reading from shifting the whole curve). The status message shows the ETA to the pull target from the current reading. Background and validation: [docs/kerntemperatur-prognose_en.md](docs/kerntemperatur-prognose_en.md) (German: [docs/kerntemperatur-prognose.md](docs/kerntemperatur-prognose.md)).
+After `wrapped`, the watcher fits the end phase of the cook with Newton's law of heating, `T(t) = A - (A - T0)·e^(-c·t)`, using its own core readings. `A` is the real smoker temperature (`set pit`, default 110 °C), the fit starts `ENDPHASE_SETTLE_MINUTES` after the wrap; `c` and the start value `T0` are fitted with a robust (Huber) loss via scipy, so a single glitchy reading barely moves the curve. The status message shows the ETA to the pull target from the current reading. Background and validation: [docs/kerntemperatur-prognose_en.md](docs/kerntemperatur-prognose_en.md) (German: [docs/kerntemperatur-prognose.md](docs/kerntemperatur-prognose.md)).
 
 ## Configuration
 

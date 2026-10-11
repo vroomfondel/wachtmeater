@@ -31,30 +31,37 @@ window starting right after the wrap fits badly.
 
 Fitting
 -------
-The note's script uses ``scipy.optimize.curve_fit``.  This module is pure
-Python on purpose — numpy/scipy would be two heavy new dependencies in the
-watcher image just for one small fit — so it needs its own least-squares
-solver:
+The fits use ``scipy.optimize.least_squares`` (the note's script used
+``curve_fit``, which wraps the same solver):
 
 * ``c`` sits in the exponent, so the fit is *nonlinear* least squares — there
-  is no closed-form solution like for the linear trend.
-* Log-linearising (``ln(A - T)`` against ``t``, then a straight line) would be
-  closed-form, but it weights the residuals differently (errors near ``A``
-  get blown up) and gives a different ``c`` than the note's ``curve_fit``.
-  It also breaks as soon as a reading reaches ``A``.
-* With ``A`` fixed only one parameter is left, ``c``, in a known range.  For
-  that, a 1-D search on ``SSE(c)`` is the simplest robust solver — see
-  ``_golden_min`` for why golden section.
-* The free fit (``A`` and ``c``) is reduced to 1-D searches too: for each
-  candidate ``A`` the best ``c`` is found (the "profile"), and the profile is
-  minimised over ``A`` in ``[target + 0.1, pit]``.  This handles the bounds
-  directly and finds the same optimum as ``curve_fit`` with bounds.  The
-  standard error of ``A`` comes from the Jacobian, exactly as ``curve_fit``
-  computes its covariance.
+  is no closed-form solution like for the linear trend.  Log-linearising
+  (``ln(A - T)`` against ``t``) would be closed-form, but it weights the
+  residuals differently (errors near ``A`` get blown up) and breaks as soon
+  as a reading reaches ``A``.
+* ``T0`` (the curve's start value) is fitted too, as in the standard
+  asymptotic regression model (R's ``SSasymp``), instead of being pinned to
+  the first reading: one noisy first reading would otherwise shift the
+  whole curve (a -1 C glitch moved the ETA by up to ~80 min).
+* **Robust loss (Huber).**  A plain least-squares fit lets a single bad
+  reading (probe touched, lid open, sensor glitch) pull the whole curve,
+  because its error counts squared.  The Huber loss counts errors up to a
+  threshold squared and beyond it only linearly, so outliers lose most of
+  their pull.  The threshold follows the standard recipe: a first
+  least-squares fit gives the residuals, their MAD gives a robust noise
+  ``sigma``, and the threshold is ``1.345 * sigma`` (95 % efficiency on
+  clean, normally distributed data), at least ``F_SCALE_MIN``.  On the
+  cook from 11.10.2026 a -1 C glitch in the first reading moves the ETA by
+  0-3 min instead of 19-29 min.
+* The free fit (``A``, ``T0``, ``c``) is bounded: ``target + 0.1 <= A <= pit``.
+  It is started from a few ``A`` values and the best result is kept, so a
+  local minimum near one bound does not win.  The standard error of ``A``
+  comes from the Jacobian at the solution, as ``curve_fit`` computes its
+  covariance.
 
-Checked against the note: on the cook from 11.10.2026 (08:01–10:25) every
-value matches the scipy output to the printed precision
-(``tests/test_core_forecast.py``).
+With ``loss="linear"`` the fits reproduce ``curve_fit`` with ``A``, ``T0`` and
+``c`` free (``tests/test_core_forecast.py``).  The note's script pinned ``T0``
+to the first reading and therefore shows slightly different numbers.
 
 The module only works on generic ``(epoch, core, ambient)`` readings — the
 watcher feeds it its own samples (end phase from the ``wrapped`` command on,
@@ -72,6 +79,11 @@ import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Literal
+
+import numpy as np
+from numpy.typing import NDArray
+from scipy.optimize import OptimizeResult, least_squares
 
 Reading = tuple[float, float, float | None]
 """One status reading: ``(epoch_seconds, core_c, ambient_c_or_None)``."""
@@ -85,6 +97,22 @@ _C_BOUNDS_FIXED: tuple[float, float] = (1e-6, 10.0)
 _C_BOUNDS_FREE: tuple[float, float] = (1e-3, 5.0)
 """Bounds for ``c`` [1/h] in the free fit (as in the note's script)."""
 _FREE_A_MARGIN: float = 0.1
+"""Free ``A`` must stay at least this far above the target (else no arrival)."""
+
+Loss = Literal["linear", "huber"]
+"""``least_squares`` loss: ``"linear"`` = plain least squares, ``"huber"`` = robust."""
+FIT_LOSS: Loss = "huber"
+"""Default loss of the exponential fits (see the module docstring)."""
+HUBER_K: float = 1.345
+"""Huber threshold in units of the robust noise sigma (standard tuning constant)."""
+MAD_TO_SIGMA: float = 1.4826
+"""Makes the MAD consistent with sigma for normally distributed noise."""
+F_SCALE_MIN: float = 0.05
+"""Lower bound of the Huber threshold in C.  The MEATER reports 0.1 C steps;
+on a near-perfect fit the MAD would otherwise shrink to ~0 and every reading
+would count as an outlier."""
+_FREE_A_STARTS: tuple[float, ...] = (0.1, 0.5, 0.9)
+"""Start values of the free fit as fractions of the ``A`` range."""
 
 MAX_ETA_HOURS: float = 24.0
 """ETAs further out than this are shown as "nicht absehbar".  A (nearly) flat
@@ -101,15 +129,15 @@ DEFAULT_STABLE_RMS: float = 0.1
 DEFAULT_BOUND_EPS: float = 0.2
 """Free ``A`` within this distance [C] above its lower bound counts as pinned
 (at least; see ``is_stable``)."""
-DEFAULT_STDERR_MAX: float = 3.0
+DEFAULT_STDERR_MAX: float = 5.0
 """Largest standard error of the free ``A`` [C] for which ``A`` counts as
-determined by the data (11.10.2026, 08:01-10:25: ±1.8; a 1-hour window right
-after acceptance can be ±13)."""
+determined by the data (11.10.2026, 08:01-10:25: ±3.9 with ``T0`` fitted —
+±1.8 when ``T0`` was pinned to the first reading; a 1-hour window right after
+acceptance can be ±13 and more)."""
 DEFAULT_SEARCH_MAX_POINTS: int = 40
 """Readings per candidate fit during the search (thinned, keeps it cheap)."""
 DEFAULT_MAX_CANDIDATES: int = 36
 """Upper bound on candidate starts per search; longer windows get a coarser step."""
-"""Free ``A`` must stay at least this far above the target (else no arrival)."""
 
 
 @dataclass(frozen=True)
@@ -198,65 +226,10 @@ class Forecast:
 # ---------------------------------------------------------------------------
 
 
-def _golden_min(f: Callable[[float], float], lo: float, hi: float, iterations: int = 120) -> float:
-    """Minimise a unimodal function on ``[lo, hi]`` by golden-section search.
-
-    This is the solver behind all exponential fits (see the module docstring
-    for why we need our own instead of ``scipy.optimize.curve_fit``).
-
-    Why golden section and not Newton / Gauss-Newton / Levenberg-Marquardt:
-
-    * **No derivatives and no start value.**  It only evaluates ``f``.
-      Gradient methods need ``dSSE/dc`` and a good initial guess (``curve_fit``
-      needs ``p0``) and can diverge or run out of bounds on flat data.
-    * **Bounds are built in.**  The search never leaves ``[lo, hi]``, so
-      ``c > 0`` and ``target < A <= pit`` hold without extra checks.
-    * **Guaranteed convergence.**  Each step shrinks the interval by a fixed
-      factor of 0.618, so 120 steps give a precision of ~1e-25 of the range,
-      far below the sensor resolution.  There are no tolerance or step-size
-      settings to tune.
-    * **Cheap enough.**  One evaluation of ``SSE`` is ``O(n)``.  With the
-      profile over ``A`` that is ~120 x 120 x n operations: measured ~0.2 s
-      for the at most 120 points the watcher fits (it thins its samples),
-      ~0.03 s for 15 points.  That runs in the check's worker thread
-      every few minutes, so it is no problem.
-
-    "Golden": the two inner points are placed at the golden ratio, so after
-    each step one of them can be reused.  Each step therefore costs only one
-    new function evaluation instead of two.
-
-    Requirement: ``f`` must be unimodal on ``[lo, hi]`` (exactly one minimum).
-    That holds for ``SSE(c)`` of the monotone, saturating model on rising
-    data, and in practice for the profile over ``A``.  For a function with
-    several minima the search would only find one of them.
-
-    Args:
-        f: Function to minimise.
-        lo: Lower bound.
-        hi: Upper bound.
-        iterations: Number of interval reductions (0.618^120 ~ 1e-25).
-
-    Returns:
-        The argument of the minimum.
-    """
-    inv_phi = (math.sqrt(5) - 1) / 2
-    a, b = lo, hi
-    x1 = b - inv_phi * (b - a)
-    x2 = a + inv_phi * (b - a)
-    f1, f2 = f(x1), f(x2)
-    for _ in range(iterations):
-        if f1 <= f2:
-            b, x2, f2 = x2, x1, f1
-            x1 = b - inv_phi * (b - a)
-            f1 = f(x1)
-        else:
-            a, x1, f1 = x1, x2, f2
-            x2 = a + inv_phi * (b - a)
-            f2 = f(x2)
-    return (a + b) / 2
+FloatArray = NDArray[np.float64]
 
 
-def _model(t: float, ambient: float, core0: float, c: float) -> float:
+def _model(t: FloatArray, ambient: float, core0: float, c: float) -> FloatArray:
     """Evaluate the end-phase model ``T(t) = A - (A - T0) * exp(-c * t)``.
 
     The core approaches the effective surface temperature ``A``
@@ -265,42 +238,23 @@ def _model(t: float, ambient: float, core0: float, c: float) -> float:
     ``t`` it tends to ``A`` without ever reaching it.
 
     Args:
-        t: Time in **hours** since the start of the fit window (the first
+        t: Times in **hours** since the start of the fit window (the first
             reading), not epoch seconds.
         ambient: ``A`` — effective surface temperature in C that the core
             heads towards.  Not the MEATER ambient reading: at most the real
             smoker (pit) temperature, in foil with juice ~100 C (boiling).
-        core0: ``T0`` — core temperature in C at ``t = 0``, i.e. the first
-            reading of the window.  Held fixed (not fitted), as in the
-            note's script.
+        core0: ``T0`` — model core temperature in C at ``t = 0`` (start of
+            the window).  Fitted like ``c``, not pinned to the first reading.
         c: Rate constant in **1/h** — how fast the core closes the gap to
-            ``A``.  Fitted from the data; ideally ``~ pi^2 * alpha / D^2``
-            for a slab of thickness ``D``, in reality smaller (wrap,
-            air-to-meat heat transfer, remaining evaporation).  On
-            11.10.2026 about 0.09–0.18 /h depending on ``A``.
+            ``A``.  Ideally ``~ pi^2 * alpha / D^2`` for a slab of thickness
+            ``D``, in reality smaller (wrap, air-to-meat heat transfer,
+            remaining evaporation).  On 11.10.2026 about 0.09–0.16 /h
+            depending on ``A``.
 
     Returns:
-        Modelled core temperature in C at time *t*.
+        Modelled core temperatures in C at times *t*.
     """
-    return ambient - (ambient - core0) * math.exp(-c * t)
-
-
-def _sse(t_h: Sequence[float], core: Sequence[float], ambient: float, c: float) -> float:
-    """Sum of squared residuals of the exponential model over all readings.
-
-    This is the quantity the fit minimises.  ``T0`` is the first reading.
-
-    Args:
-        t_h: Times of the readings in hours since the first reading.
-        core: Measured core temperatures in C, same order as *t_h*.
-        ambient: Effective surface temperature ``A`` in C (see ``_model``).
-        c: Rate constant in 1/h (see ``_model``).
-
-    Returns:
-        ``sum((T_model(t) - T_measured)^2)`` in C^2.
-    """
-    core0 = core[0]
-    return sum((_model(t, ambient, core0, c) - k) ** 2 for t, k in zip(t_h, core))
+    return ambient - (ambient - core0) * np.exp(-c * t)
 
 
 def eta_hours(ambient: float, c: float, core_now: float, target: float) -> float | None:
@@ -345,40 +299,107 @@ def fit_linear(t_h: Sequence[float], core: Sequence[float], target: float) -> Li
     return LinearFit(rate=rate, eta_hours=(target - intercept) / rate - t_h[-1])
 
 
-def _best_c(t_h: Sequence[float], core: Sequence[float], ambient: float, bounds: tuple[float, float]) -> float:
-    """Least-squares ``c`` for a fixed ``A``."""
-    return _golden_min(lambda c: _sse(t_h, core, ambient, c), *bounds)
+def _c_guess(t: FloatArray, core: FloatArray, ambient: float, bounds: tuple[float, float]) -> float:
+    """Start value for ``c`` from the first and last reading.
+
+    Solves the model through both end points; falls back to 0.1 /h when the
+    data do not allow it (flat or falling core, a reading at or above ``A``).
+    The result is clipped strictly inside *bounds*, as ``least_squares``
+    requires.
+    """
+    lo, hi = bounds
+    c = 0.1
+    if t[-1] > 0 and core[-1] > core[0] and ambient > core[-1]:
+        c = math.log((ambient - core[0]) / (ambient - core[-1])) / float(t[-1])
+    return min(max(c, lo * 1.01), hi * 0.99)
 
 
-def fit_fixed_ambient(t_h: Sequence[float], core: Sequence[float], ambient: float, target: float) -> ExpFit:
-    """Fit ``c`` with ``A`` held fixed.
+def _robust_f_scale(residuals: FloatArray) -> float:
+    """Huber threshold from the residuals of a plain least-squares fit.
+
+    ``HUBER_K`` robust standard deviations (MAD estimate), at least
+    ``F_SCALE_MIN``.
+    """
+    sigma = MAD_TO_SIGMA * float(np.median(np.abs(residuals)))
+    return max(HUBER_K * sigma, F_SCALE_MIN)
+
+
+def _solve(
+    residuals: Callable[[FloatArray], FloatArray],
+    starts: Sequence[Sequence[float]],
+    lower: Sequence[float],
+    upper: Sequence[float],
+    loss: Loss,
+) -> OptimizeResult:
+    """Run ``least_squares`` from each start and keep the lowest cost.
+
+    With ``loss="huber"`` a plain least-squares pass comes first: its
+    residuals set the Huber threshold (``_robust_f_scale``), and the robust
+    pass starts from its solution.
+
+    Args:
+        residuals: ``params -> model - measured``.
+        starts: Start parameter vectors (strictly inside the bounds).
+        lower: Lower bounds per parameter.
+        upper: Upper bounds per parameter.
+        loss: ``"linear"`` or ``"huber"``.
+
+    Returns:
+        The ``least_squares`` result of the final pass.
+    """
+    best: OptimizeResult | None = None
+    for x0 in starts:
+        res = least_squares(residuals, x0, bounds=(lower, upper), method="trf")
+        if best is None or res.cost < best.cost:
+            best = res
+    assert best is not None
+    if loss == "linear":
+        return best
+    return least_squares(
+        residuals, best.x, bounds=(lower, upper), method="trf", loss=loss, f_scale=_robust_f_scale(best.fun)
+    )
+
+
+def fit_fixed_ambient(
+    t_h: Sequence[float], core: Sequence[float], ambient: float, target: float, loss: Loss = FIT_LOSS
+) -> ExpFit:
+    """Fit ``T0`` and ``c`` with ``A`` held fixed.
 
     Args:
         t_h: Hours since the first reading.
         core: Core temperatures.
         ambient: Fixed effective surface temperature ``A``.
         target: Target core temperature.
+        loss: ``"huber"`` (robust, default) or ``"linear"``.
 
     Returns:
         The fit with RMS and ETA from the last reading.
     """
-    c = _best_c(t_h, core, ambient, _C_BOUNDS_FIXED)
-    rms = math.sqrt(_sse(t_h, core, ambient, c) / len(t_h))
+    t = np.asarray(t_h, dtype=float)
+    k = np.asarray(core, dtype=float)
+
+    def _res(p: FloatArray) -> FloatArray:
+        r: FloatArray = _model(t, ambient, p[0], p[1]) - k
+        return r
+
+    x0 = [float(k[0]), _c_guess(t, k, ambient, _C_BOUNDS_FIXED)]
+    res = _solve(_res, [x0], [-np.inf, _C_BOUNDS_FIXED[0]], [np.inf, _C_BOUNDS_FIXED[1]], loss)
+    c = float(res.x[1])
+    rms = math.sqrt(float(np.mean(_res(res.x) ** 2)))
     return ExpFit(ambient=ambient, c=c, rms=rms, eta_hours=eta_hours(ambient, c, core[-1], target))
 
 
-def fit_free_ambient(t_h: Sequence[float], core: Sequence[float], target: float, pit: float) -> ExpFit | None:
-    """Fit ``A`` and ``c`` with ``target + 0.1 <= A <= pit``.
-
-    The profile ``min_c SSE(A, c)`` is minimised over ``A``.  The standard
-    error of ``A`` comes from ``_ambient_stderr`` (Jacobian, as in
-    ``curve_fit``).
+def fit_free_ambient(
+    t_h: Sequence[float], core: Sequence[float], target: float, pit: float, loss: Loss = FIT_LOSS
+) -> ExpFit | None:
+    """Fit ``A``, ``T0`` and ``c`` with ``target + 0.1 <= A <= pit``.
 
     Args:
         t_h: Hours since the first reading.
         core: Core temperatures.
         target: Target core temperature (lower bound for ``A``).
         pit: Real smoker temperature (upper bound for ``A``).
+        loss: ``"huber"`` (robust, default) or ``"linear"``.
 
     Returns:
         The free fit, or ``None`` if it is undetermined (too few points or
@@ -388,105 +409,70 @@ def fit_free_ambient(t_h: Sequence[float], core: Sequence[float], target: float,
     lo = target + _FREE_A_MARGIN
     if n < 3 or pit <= lo:
         return None
+    t = np.asarray(t_h, dtype=float)
+    k = np.asarray(core, dtype=float)
 
-    def _profile(ambient: float) -> float:
-        return _sse(t_h, core, ambient, _best_c(t_h, core, ambient, _C_BOUNDS_FREE))
+    def _res(p: FloatArray) -> FloatArray:
+        r: FloatArray = _model(t, p[0], p[1], p[2]) - k
+        return r
 
-    ambient = _golden_min(_profile, lo, pit)
-    c = _best_c(t_h, core, ambient, _C_BOUNDS_FREE)
-    sse = _sse(t_h, core, ambient, c)
-
+    starts = []
+    for frac in _FREE_A_STARTS:
+        a0 = lo + frac * (pit - lo)
+        starts.append([a0, float(k[0]), _c_guess(t, k, a0, _C_BOUNDS_FREE)])
+    res = _solve(_res, starts, [lo, -np.inf, _C_BOUNDS_FREE[0]], [pit, np.inf, _C_BOUNDS_FREE[1]], loss)
+    ambient, c = float(res.x[0]), float(res.x[2])
     return ExpFit(
         ambient=ambient,
         c=c,
-        rms=math.sqrt(sse / n),
+        rms=math.sqrt(float(np.mean(_res(res.x) ** 2))),
         eta_hours=eta_hours(ambient, c, core[-1], target),
-        ambient_stderr=_ambient_stderr(t_h, core[0], ambient, c, sse),
+        ambient_stderr=_ambient_stderr(res, n),
         fixed=False,
     )
 
 
-def _ambient_stderr(t_h: Sequence[float], core0: float, ambient: float, c: float, sse: float) -> float | None:
-    """Standard error of the fitted ``A`` (the "±1.8" in ``A=98.5±1.8``).
+def _ambient_stderr(res: OptimizeResult, n: int) -> float | None:
+    """Standard error of the fitted ``A`` (the "±3.9" in ``A=102.5±3.9``).
 
     Question: how precisely do the data pin down ``A``?  If ``A`` could move
     a lot while the curve still fits the readings about as well, ``A`` is
-    uncertain.  This is the same estimate ``scipy.optimize.curve_fit``
-    returns as its covariance matrix.
+    uncertain.  Computed exactly as ``scipy.optimize.curve_fit`` computes its
+    covariance:
 
-    **What is the Jacobian?**  For each reading it holds how strongly the
-    model value reacts to a small change of each parameter — the partial
-    derivatives at the fitted optimum.  With ``n`` readings and two
-    parameters (``A``, ``c``) it is an ``n x 2`` table::
+    * The **Jacobian** ``J`` holds, for each reading, how strongly the model
+      value reacts to a small change of each parameter (``A``, ``T0``,
+      ``c``).  ``least_squares`` returns it at the solution (with a robust
+      loss already weighted, so outliers count less here too).
+    * ``cov = s^2 * (J^T J)^-1`` with ``s^2 = 2 * cost / (n - 3)``, the
+      residual variance (``n - 3``: three fitted parameters).
+    * The standard error of ``A`` is the square root of ``cov[0][0]``.
 
-        J[i] = ( dT(t_i)/dA ,  dT(t_i)/dc )
-
-    For ``T(t) = A - (A - T0) * exp(-c t)`` (with ``e = exp(-c t)``):
-
-    * ``dT/dA = 1 - e`` — at ``t = 0`` raising ``A`` changes nothing (the
-      curve starts at ``T0``), late in the window it shifts the curve almost
-      one-to-one.  So readings late in the window carry the information
-      about ``A``.
-    * ``dT/dc = (A - T0) * t * e`` — how much faster/slower approach
-      changes the value; largest in the middle of the curve.
-
-    **Steps:**
-
-    1. ``J^T J`` (2x2): for each parameter pair, sum the products of the
-       derivatives over all readings::
-
-           [ sum(dA*dA)  sum(dA*dc) ]     = [ jaa  jac ]
-           [ sum(dA*dc)  sum(dc*dc) ]       [ jac  jcc ]
-
-       Large diagonal = the data react strongly to this parameter (it is well
-       determined).  Large off-diagonal = ``A`` and ``c`` can partly stand in
-       for each other (a higher ``A`` with smaller ``c`` gives a similar
-       curve) — exactly the trade-off the note describes.
-    2. Residual variance ``s^2 = SSE / (n - 2)``: the scatter of the readings
-       around the curve; ``n - 2`` because two parameters were fitted.
-    3. Covariance ``cov = s^2 * (J^T J)^-1``.  The inverse of a 2x2 matrix
-       is ``1/det * [[jcc, -jac], [-jac, jaa]]`` with
-       ``det = jaa*jcc - jac^2``.  The variance of ``A`` is the top-left
-       entry: ``s^2 * jcc / det``.
-    4. The standard error is its square root.
-
-    Intuition: ``det`` is small when the two derivative columns are almost
-    proportional — ``A`` and ``c`` can hardly be told apart — so the error of
-    ``A`` gets large.  More curvature in the data (a longer end phase) makes
-    them distinguishable and the error shrinks.
-
-    This is a linear approximation around the optimum.  It assumes
-    independent errors of equal size and ignores the bounds: if ``A`` sits
-    at a bound (target or pit) the value is only a rough indication.
+    It gets large when the parameters can stand in for each other (a higher
+    ``A`` with a smaller ``c`` gives almost the same curve); more curvature in
+    the data (a longer end phase) separates them.  It is a linear
+    approximation that ignores the bounds: with ``A`` at a bound the value is
+    only a rough indication.
 
     Args:
-        t_h: Times of the readings in hours since the first reading.
-        core0: ``T0``, the first reading (fixed in the model).
-        ambient: Fitted ``A`` in C.
-        c: Fitted rate constant in 1/h.
-        sse: Sum of squared residuals at the optimum.
+        res: ``least_squares`` result of the free fit.
+        n: Number of readings.
 
     Returns:
-        Standard error of ``A`` in C, or ``None`` if ``A`` and ``c`` cannot
-        be separated (``det <= 0``) or there are too few readings.
+        Standard error of ``A`` in C, or ``None`` with too few readings or a
+        singular ``J^T J`` (parameters not separable).
     """
-    n = len(t_h)
-    if n < 3:
+    if n < 4:
         return None
-    # Step 1: J^T J from the partial derivatives of every reading
-    jaa = jac = jcc = 0.0
-    for t in t_h:
-        e = math.exp(-c * t)
-        d_a = 1 - e  # dT/dA
-        d_c = (ambient - core0) * t * e  # dT/dc
-        jaa += d_a * d_a
-        jac += d_a * d_c
-        jcc += d_c * d_c
-    det = jaa * jcc - jac * jac
-    if det <= 0:
+    jtj = res.jac.T @ res.jac
+    try:
+        cov = np.linalg.inv(jtj) * (2 * res.cost / (n - 3))
+    except np.linalg.LinAlgError:
         return None
-    # Steps 2–4: s^2 = SSE/(n-2); var(A) = s^2 * [(J^T J)^-1]_AA = s^2 * jcc/det
-    return math.sqrt(sse / (n - 2) * jcc / det)
+    var_a = float(cov[0, 0])
+    if not math.isfinite(var_a) or var_a < 0:
+        return None
+    return math.sqrt(var_a)
 
 
 # ---------------------------------------------------------------------------
@@ -669,6 +655,7 @@ def forecast(
     target: float = DEFAULT_TARGET_TEMP,
     pit: float = DEFAULT_PIT_TEMP,
     fixed_ambients: Sequence[float] = DEFAULT_FIXED_AMBIENTS,
+    loss: Loss = FIT_LOSS,
 ) -> Forecast:
     """Compute all forecast variants over the given end-phase readings.
 
@@ -680,6 +667,8 @@ def forecast(
             the free fit.
         fixed_ambients: Additional fixed ``A`` values; those not above the
             target are skipped.
+        loss: Loss of the exponential fits (``"huber"`` robust, default, or
+            ``"linear"`` plain least squares).
 
     Returns:
         The forecast.
@@ -697,7 +686,7 @@ def forecast(
     fixed: list[ExpFit] = []
     for ambient in (pit, *fixed_ambients):
         if ambient > target and all(f.ambient != ambient for f in fixed):
-            fixed.append(fit_fixed_ambient(t_h, core, ambient, target))
+            fixed.append(fit_fixed_ambient(t_h, core, ambient, target, loss))
 
     return Forecast(
         start=start,
@@ -710,7 +699,7 @@ def forecast(
         points=len(readings),
         linear=fit_linear(t_h, core, target),
         fixed=fixed,
-        free=fit_free_ambient(t_h, core, target, pit),
+        free=fit_free_ambient(t_h, core, target, pit, loss),
     )
 
 

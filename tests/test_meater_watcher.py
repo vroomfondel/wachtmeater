@@ -1698,6 +1698,37 @@ class TestAmbientRiseDisturbance:
         st = self._state([(0.0, 40.0), (600.0, 60.0), (1200.0, 80.0)], core=20.0)
         assert mw._detect_disturbance(st, 1800.0, 20.0, 110.0) is None
 
+    # Pit swinging ±4 C every reading (e.g. a pellet grill cycling)
+    NOISY = [100.0, 106.0, 99.0, 105.0, 98.0, 107.0, 101.0]
+
+    def test_noisy_pit_swing_is_no_spike(self) -> None:
+        # 5.5 C above the window max would trip the fixed 5 C threshold.
+        st = self._state([(i * 600.0, a) for i, a in enumerate(self.NOISY)])
+        assert mw._detect_disturbance(st, 4200.0, 92.0, 112.5) is None
+
+    def test_noisy_pit_real_flare_up_still_detected(self) -> None:
+        st = self._state([(i * 600.0, a) for i, a in enumerate(self.NOISY)])
+        reason = mw._detect_disturbance(st, 4200.0, 92.0, 135.0)
+        assert reason is not None and "Ambient-Spitze" in reason
+
+
+class TestNoiseSigma:
+    def test_steady_trend_is_no_noise(self) -> None:
+        samples = [[i * 600.0, 70.0 + 0.4 * i] for i in range(5)]
+        assert mw._noise_sigma(samples) == pytest.approx(0.0, abs=1e-9)
+
+    def test_single_dip_barely_moves_estimate(self) -> None:
+        calm = [[i * 600.0, a] for i, a in enumerate([102.0, 103.1, 101.8, 102.6, 102.2, 103.0, 101.9])]
+        dipped = [*calm[:4], [2400.0, 78.0], *calm[5:]]
+        assert mw._noise_sigma(dipped) < 2 * mw._noise_sigma(calm) < 2.0
+
+    def test_alternating_swings_count_as_noise(self) -> None:
+        samples = [[i * 600.0, a] for i, a in enumerate(TestAmbientRiseDisturbance.NOISY)]
+        assert mw._noise_sigma(samples) > 3.0
+
+    def test_too_few_readings(self) -> None:
+        assert mw._noise_sigma([[0.0, 100.0], [600.0, 120.0]]) == 0.0
+
 
 class TestTrendAbCommand:
     @patch.object(mw, "save_state")
