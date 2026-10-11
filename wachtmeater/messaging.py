@@ -12,6 +12,10 @@ MessageCallback = Callable[[str, str, str, str], Coroutine[None, None, None]]
 """Signature: (room_id, sender, body, room_display_name) -> async None"""
 
 
+class MessageSendError(Exception):
+    """Raised by ``send_message(..., strict=True)`` when delivery failed."""
+
+
 class RoomSelection(NamedTuple):
     """Result of room selection / auto-creation.
 
@@ -74,8 +78,12 @@ class MessagingBackend(Protocol):
         """Return the bot's own user identifier."""
         ...
 
-    async def send_message(self, room_id: str, text: str) -> None:
-        """Send a text message to the given room."""
+    async def send_message(self, room_id: str, text: str, *, strict: bool = False) -> None:
+        """Send a text message to the given room.
+
+        With *strict* set, a failed delivery raises ``MessageSendError``
+        instead of only being logged, so callers (alerts) can retry.
+        """
         ...
 
     async def send_image(self, room_id: str, image_path: str) -> None:

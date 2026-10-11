@@ -80,7 +80,7 @@ Send these in the Matrix room the bot has joined (case-insensitive):
 | `disable tempdown` | Disable ambient temp drop alert |
 | `enable ruhephase <temp>` | Enable rest/cooldown alert at target temp (C). Automatically disables `tempdown` — the cooldown is intended here and would otherwise trigger a false "fire is out" alarm. Re-arm with `enable tempdown` afterwards |
 | `disable ruhephase` | Disable rest/cooldown alert (does *not* restore `tempdown`) |
-| `enable stall [<delta>]` | Enable stall detection (optional: min rise in C) |
+| `enable stall [<rate>]` | Enable stall detection (optional: threshold in °C/h, default 4). Fires when the core rises slower than that over `STALL_WINDOW_MINUTES` inside `STALL_CORE_MIN`–`STALL_CORE_MAX`; falling temps and disturbances (lid open, probe re-seated) never count as a stall, and after the wrap it no longer asks to wrap |
 | `disable stall` | Disable stall detection |
 | `enable wrap <temp>` | Enable wrap reminder at internal temp (C) |
 | `disable wrap` | Disable wrap reminder |
@@ -99,6 +99,9 @@ Send these in the Matrix room the bot has joined (case-insensitive):
 | `reset stall` | Reset stall alert (re-arms after it fired) |
 | `reset wrap` | Reset wrap alert (re-arms after it fired) |
 | `reset ambient` | Clear the tracked ambient high-water mark (`Max Ambient`). The next check re-seeds it from the current reading, so `tempdown` measures its drop from there. Use after deliberately turning the fire down. Aliases: `reset maxambient`, `reset max ambient`, `ambient reset` |
+| `pause [<min>]` | Lid open / wrapping: mute `tempdown`, stall and ambient range for `<min>` minutes (default `PAUSE_DEFAULT_MINUTES`); the ambient high-water mark is reset when the pause ends. Pull, offline and cook-end alerts stay active. Shown with remaining time in the status |
+| `wrapped [<min>]` | Like `pause`, and marks the wrap as done |
+| `resume` | End a pause early |
 | `testcall [<text>]` | Trigger a SIP phone call to the pitmaster with optional spoken text (default: `Wachtmeater Testanruf`). The text keeps its original case so TTS pronounces names correctly. |
 | `hilfe` / `help` / `?` | Show available commands |
 | `stop` / `quit` / `beenden` / `exit` | Shut down the watcher loop |
@@ -173,7 +176,13 @@ cp wachtmeater.toml.example wachtmeater.local.toml
 | `STATE_FILE_DIR` | Directory for the JSON state file | `/data` |
 | `STATE_FILE_NAME` | State file name (auto-generated from cook UUID when empty) | `""` |
 | `CHECK_INTERVAL` | Seconds between periodic checks | `600` |
-| `STALL_WINDOW` | Number of consecutive checks for stall detection | `3` |
+| `STALL_WINDOW_MINUTES` | Time window for the stall rise rate (independent of the check interval) | `30` |
+| `STALL_CORE_MIN` / `STALL_CORE_MAX` | Core range (°C) in which stall detection runs | `60.0` / `82.0` |
+| `STALL_DISTURBANCE_AMBIENT_DROP` | Ambient drop (°C, vs. previous reading or moving average) that marks a disturbance | `15.0` |
+| `STALL_DISTURBANCE_CORE_DROP` | Core drop (°C vs. previous reading) that marks a disturbance | `1.0` |
+| `STALL_DISTURBANCE_PAUSE_CHECKS` | Checks stall detection sits out after a disturbance | `2` |
+| `PAUSE_DEFAULT_MINUTES` | Default duration of `pause` / `wrapped` | `20` |
+| `FORECAST_WINDOW_MINUTES` | Window for the watcher's own linear ETA forecast to the pull target | `60` |
 | `AMBIENT_TEMP_DROP_THRESHOLD` | Ambient temp drop (°C) to trigger fire-out alert | `10` |
 | `COOKEND_ERROR_THRESHOLD` | Consecutive fetch errors before declaring cook ended | `3` |
 | `COOKEND_PROBE_REMOVED_TEMP` | Internal temp (°C) below which probe counts as removed | `35.0` |
@@ -207,7 +216,7 @@ These set the initial values written into a fresh per-cook state file. Once the 
 | `ALERT_DEFAULT_RUHEPHASE_ENABLED` | Rest/cooldown alert | `false` |
 | `ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP` | Target cooldown temp (°C) | `0.0` |
 | `ALERT_DEFAULT_STALL_ENABLED` | Stall detection | `false` |
-| `ALERT_DEFAULT_STALL_MIN_DELTA` | Min internal-temp rise (°C) over the stall window | `0.3` |
+| `ALERT_DEFAULT_STALL_MAX_RATE` | Stall threshold: core rise rate (°C/h) below which a stall is reported (replaces `ALERT_DEFAULT_STALL_MIN_DELTA`) | `4.0` |
 | `ALERT_DEFAULT_WRAP_ENABLED` | One-shot wrap reminder | `false` |
 | `ALERT_DEFAULT_WRAP_TARGET_TEMP` | Internal temp (°C) at which to remind about wrapping | `0.0` |
 | `ALERT_DEFAULT_AMBIENT_RANGE_ENABLED` | Smoker too hot / too cold alert | `false` |

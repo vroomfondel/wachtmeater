@@ -62,7 +62,7 @@ data:
     [monitoring]
     check_interval              = 600
     ambient_temp_drop_threshold = 10
-    stall_window                = 3
+    stall_window_minutes        = 30
     cookend_probe_removed_temp  = 35
 
     # First-run alert defaults — propagated into spawned watcher TOMLs by
@@ -74,7 +74,7 @@ data:
     tempalert_ruhephase_enabled      = false
     ruhephase_target_temp            = 0.0
     tempalert_stall_enabled          = true
-    stall_min_delta                  = 1.0
+    stall_max_rate                   = 4.0
     tempalert_wrap_enabled           = true
     wrap_target_temp                 = 75.0
     tempalert_ambient_range_enabled  = false

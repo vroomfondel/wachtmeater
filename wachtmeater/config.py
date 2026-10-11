@@ -53,7 +53,13 @@ Environment variable reference
 **[monitoring]** — Cook-monitoring thresholds and intervals:
     ``AMBIENT_TEMP_DROP_THRESHOLD`` (``10``),
     ``CHECK_INTERVAL`` (``600``),
-    ``STALL_WINDOW`` (``3``),
+    ``STALL_WINDOW_MINUTES`` (``30``),
+    ``STALL_CORE_MIN`` (``60.0``), ``STALL_CORE_MAX`` (``82.0``),
+    ``STALL_DISTURBANCE_AMBIENT_DROP`` (``15.0``),
+    ``STALL_DISTURBANCE_CORE_DROP`` (``1.0``),
+    ``STALL_DISTURBANCE_PAUSE_CHECKS`` (``2``),
+    ``PAUSE_DEFAULT_MINUTES`` (``20``),
+    ``FORECAST_WINDOW_MINUTES`` (``60``),
     ``COOKEND_ERROR_THRESHOLD`` (``3``),
     ``COOKEND_PROBE_REMOVED_TEMP`` (``35.0``),
     ``STATION_OFFLINE_CALL_THRESHOLD`` (``2``).
@@ -81,7 +87,7 @@ Environment variable reference
     ``ALERT_DEFAULT_RUHEPHASE_ENABLED`` (``false``),
     ``ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP`` (``0.0``),
     ``ALERT_DEFAULT_STALL_ENABLED`` (``false``),
-    ``ALERT_DEFAULT_STALL_MIN_DELTA`` (``0.3``),
+    ``ALERT_DEFAULT_STALL_MAX_RATE`` (``4.0``),
     ``ALERT_DEFAULT_WRAP_ENABLED`` (``false``),
     ``ALERT_DEFAULT_WRAP_TARGET_TEMP`` (``0.0``),
     ``ALERT_DEFAULT_AMBIENT_RANGE_ENABLED`` (``false``),
@@ -324,8 +330,26 @@ class MonitoringConfig(_EnvMixin):
             triggers a fire-out alert (``AMBIENT_TEMP_DROP_THRESHOLD``).
         check_interval: Seconds between periodic MEATER checks
             (``CHECK_INTERVAL``).
-        stall_window: Number of consecutive checks used for stall
-            detection (``STALL_WINDOW``).
+        stall_window_minutes: Time window in minutes over which the core
+            temperature rise rate is evaluated for stall detection,
+            independent of the check interval (``STALL_WINDOW_MINUTES``).
+        stall_core_min: Lower bound of the core temperature range in which
+            stall detection runs (``STALL_CORE_MIN``).
+        stall_core_max: Upper bound of the core temperature range in which
+            stall detection runs (``STALL_CORE_MAX``).
+        stall_disturbance_ambient_drop: Ambient drop in C versus the
+            previous reading or the moving average that marks a disturbance
+            (lid open, wrapping) and pauses stall detection
+            (``STALL_DISTURBANCE_AMBIENT_DROP``).
+        stall_disturbance_core_drop: Core drop in C versus the previous
+            reading that marks a disturbance, e.g. a re-inserted probe
+            (``STALL_DISTURBANCE_CORE_DROP``).
+        stall_disturbance_pause_checks: Checks to skip stall evaluation
+            after a disturbance (``STALL_DISTURBANCE_PAUSE_CHECKS``).
+        pause_default_minutes: Default duration of the ``pause`` /
+            ``wrapped`` command (``PAUSE_DEFAULT_MINUTES``).
+        forecast_window_minutes: Time window for the watcher's own linear
+            ETA forecast to the pull target (``FORECAST_WINDOW_MINUTES``).
         cookend_error_threshold: Consecutive fetch errors before declaring
             cook ended (``COOKEND_ERROR_THRESHOLD``).
         cookend_probe_removed_temp: Internal temp below this (after having
@@ -344,7 +368,14 @@ class MonitoringConfig(_EnvMixin):
 
     ambient_temp_drop_threshold: int = env("AMBIENT_TEMP_DROP_THRESHOLD", default=10)
     check_interval: int = env("CHECK_INTERVAL", default=600)
-    stall_window: int = env("STALL_WINDOW", default=3)
+    stall_window_minutes: int = env("STALL_WINDOW_MINUTES", default=30)
+    stall_core_min: float = env("STALL_CORE_MIN", default=60.0)
+    stall_core_max: float = env("STALL_CORE_MAX", default=82.0)
+    stall_disturbance_ambient_drop: float = env("STALL_DISTURBANCE_AMBIENT_DROP", default=15.0)
+    stall_disturbance_core_drop: float = env("STALL_DISTURBANCE_CORE_DROP", default=1.0)
+    stall_disturbance_pause_checks: int = env("STALL_DISTURBANCE_PAUSE_CHECKS", default=2)
+    pause_default_minutes: int = env("PAUSE_DEFAULT_MINUTES", default=20)
+    forecast_window_minutes: int = env("FORECAST_WINDOW_MINUTES", default=60)
     cookend_error_threshold: int = env("COOKEND_ERROR_THRESHOLD", default=3)
     cookend_probe_removed_temp: float = env("COOKEND_PROBE_REMOVED_TEMP", default=35.0)
     station_offline_call_threshold: int = env("STATION_OFFLINE_CALL_THRESHOLD", default=2)
@@ -454,8 +485,9 @@ class AlertDefaultsConfig(_EnvMixin):
             (``ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP``).
         tempalert_stall_enabled: Enable stall detection
             (``ALERT_DEFAULT_STALL_ENABLED``).
-        stall_min_delta: Minimum rise in Celsius over the stall window
-            (``ALERT_DEFAULT_STALL_MIN_DELTA``).
+        stall_max_rate: Stall threshold in C per hour — a core rise rate
+            below this (but not negative) counts as a stall
+            (``ALERT_DEFAULT_STALL_MAX_RATE``).
         tempalert_wrap_enabled: Enable wrap reminder
             (``ALERT_DEFAULT_WRAP_ENABLED``).
         wrap_target_temp: Internal temp at which to remind about wrapping
@@ -477,7 +509,7 @@ class AlertDefaultsConfig(_EnvMixin):
     tempalert_ruhephase_enabled: bool = env("ALERT_DEFAULT_RUHEPHASE_ENABLED", default=False)
     ruhephase_target_temp: float = env("ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP", default=0.0)
     tempalert_stall_enabled: bool = env("ALERT_DEFAULT_STALL_ENABLED", default=False)
-    stall_min_delta: float = env("ALERT_DEFAULT_STALL_MIN_DELTA", default=0.3)
+    stall_max_rate: float = env("ALERT_DEFAULT_STALL_MAX_RATE", default=4.0)
     tempalert_wrap_enabled: bool = env("ALERT_DEFAULT_WRAP_ENABLED", default=False)
     wrap_target_temp: float = env("ALERT_DEFAULT_WRAP_TARGET_TEMP", default=0.0)
     tempalert_ambient_range_enabled: bool = env("ALERT_DEFAULT_AMBIENT_RANGE_ENABLED", default=False)
@@ -498,15 +530,24 @@ class WatcherState:
     max_internal_temp: float | None = None
     last_check: str | None = None
     target_reached_calls: int = 0
-    internal_temp_history: list[float] = field(default_factory=list)
+    # Timestamped readings ``[epoch_seconds, temp_c]`` for the time-based
+    # stall detection, disturbance detection and the ETA forecast.
+    internal_samples: list[list[float]] = field(default_factory=list)
+    ambient_samples: list[list[float]] = field(default_factory=list)
+    # Samples at or before this epoch are ignored for trend evaluation (stall
+    # rate, ETA forecast) — set after a disturbance or a pause so the dip
+    # does not count.
+    trend_ignore_before: float | None = None
     consecutive_errors: int = 0
     # Alert modes
     tempalert_tempdown_enabled: bool = True
     tempalert_ruhephase_enabled: bool = False
     ruhephase_target_temp: float | None = None
     tempalert_stall_enabled: bool = False
-    stall_min_delta: float = 0.3
+    stall_max_rate: float = 4.0
     stall_alerted: bool = False
+    # Checks left to skip stall evaluation after a disturbance
+    stall_pause_checks_left: int = 0
     tempalert_wrap_enabled: bool = False
     wrap_target_temp: float | None = None
     wrap_alerted: bool = False
@@ -520,6 +561,13 @@ class WatcherState:
     tempalert_station_offline_enabled: bool = True
     offline_streak: int = 0
     station_offline_call_sent: bool = False
+    offline_notified: bool = False
+    # Keys of one-shot alerts whose SIP call already went out while the
+    # Matrix message is still pending (prevents repeated calls on retry)
+    alert_calls_sent: list[str] = field(default_factory=list)
+    # ``pause`` / ``wrapped``: epoch until which TempDown, stall and the
+    # ambient range alert are muted (None = not paused)
+    pause_until: float | None = None
     # Startup behaviour
     startup_test_call_enabled: bool = True
     # Per-cook check-interval override in seconds (None = use config default)

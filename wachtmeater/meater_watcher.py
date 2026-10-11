@@ -18,8 +18,11 @@ Supported Matrix commands (case-insensitive):
       alarm.  Re-arm tempdown manually afterwards.
     - ``disable ruhephase``         — Disable rest/cooldown alert (does not
       restore the tempdown alert).
-    - ``enable stall [<min_delta>]``— Enable stall detection (optional: min
-      rise in C over the stall window, default 1).
+    - ``enable stall [<rate>]``     — Enable stall detection (optional: rise
+      rate threshold in C/h, default 4).  Fires when the core rises slower
+      than that over the stall time window inside the plausible core range;
+      falling temperatures and disturbances (lid open, probe re-seated) are
+      not stalls.
     - ``disable stall``             — Disable stall detection.
     - ``enable wrap <temp>``        — Enable wrap reminder at internal temp C.
     - ``disable wrap``              — Disable wrap reminder.
@@ -30,6 +33,12 @@ Supported Matrix commands (case-insensitive):
     - ``disable ambient``           — Disable ambient range alert.
     - ``reset ambient``             — Clear the tracked ambient high-water mark
       (re-arms the tempdown alert after a deliberate temperature drop).
+    - ``pause [<min>]``             — Mute TempDown, stall and ambient range
+      for *min* minutes (default 20), e.g. while wrapping; the ambient
+      high-water mark is reset when the pause ends.  Pull, offline and
+      cook-end alerts stay active.
+    - ``wrapped [<min>]``           — Like ``pause`` and marks the wrap as done.
+    - ``resume``                    — End a pause early.
     - ``enable cookend``            — Enable cook-end detection (auto-stop).
     - ``disable cookend``           — Disable cook-end detection.
     - ``enable offline``            — Enable station-offline alert (SIP on
@@ -49,8 +58,10 @@ All alert settings are persisted per MEATER UUID in the JSON state file.
 
 import asyncio
 import json
+import math
 import os
 import re
+import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -75,6 +86,7 @@ class MeaterData(TypedDict, total=False):
     ambient_temp_c: float | None
     target_temp_c: float | None
     remaining_time: str | None
+    remaining_minutes: int | None
     elapsed_time: str | None
     status: str
     cook_name: str | None
@@ -106,8 +118,28 @@ CHECK_INTERVAL: int = cfg.monitoring.check_interval
 MIN_CHECK_INTERVAL: int = 30
 """Lower bound for the ``set interval`` command, to avoid hammering the cook page."""
 
-# Stall detection defaults
-STALL_WINDOW: int = cfg.monitoring.stall_window
+# Stall detection: rise rate (C/h) over a time window, only inside a plausible
+# core range.  Time-based so it does not depend on the check interval.
+STALL_WINDOW_MINUTES: int = cfg.monitoring.stall_window_minutes
+STALL_CORE_MIN: float = cfg.monitoring.stall_core_min
+STALL_CORE_MAX: float = cfg.monitoring.stall_core_max
+# Disturbance (lid open / wrapping / probe re-seated) -> pause stall evaluation
+STALL_DISTURBANCE_AMBIENT_DROP: float = cfg.monitoring.stall_disturbance_ambient_drop
+STALL_DISTURBANCE_CORE_DROP: float = cfg.monitoring.stall_disturbance_core_drop
+STALL_DISTURBANCE_PAUSE_CHECKS: int = cfg.monitoring.stall_disturbance_pause_checks
+
+# ``pause`` / ``wrapped`` default duration
+PAUSE_DEFAULT_MINUTES: int = cfg.monitoring.pause_default_minutes
+
+# Watcher's own ETA forecast (linear trend) window
+FORECAST_WINDOW_MINUTES: int = cfg.monitoring.forecast_window_minutes
+
+# A trend window counts as covered when its samples span at least this share
+# of the window; samples up to WINDOW_SLACK beyond the window are accepted so
+# check jitter does not drop the oldest reading.
+WINDOW_MIN_COVERAGE: float = 0.9
+WINDOW_SLACK: float = 1.1
+SAMPLE_RETENTION_SECONDS: int = 2 * 60 * max(STALL_WINDOW_MINUTES, FORECAST_WINDOW_MINUTES)
 
 # Cook-end detection: consecutive errors before declaring cook ended
 COOKEND_ERROR_THRESHOLD: int = cfg.monitoring.cookend_error_threshold
@@ -136,7 +168,7 @@ def _apply_alert_defaults(state: WatcherState, alert_cfg: AlertDefaultsConfig) -
     state.tempalert_ruhephase_enabled = alert_cfg.tempalert_ruhephase_enabled
     state.ruhephase_target_temp = alert_cfg.ruhephase_target_temp or None
     state.tempalert_stall_enabled = alert_cfg.tempalert_stall_enabled
-    state.stall_min_delta = alert_cfg.stall_min_delta
+    state.stall_max_rate = alert_cfg.stall_max_rate
     state.tempalert_wrap_enabled = alert_cfg.tempalert_wrap_enabled
     state.wrap_target_temp = alert_cfg.wrap_target_temp or None
     state.tempalert_ambient_range_enabled = alert_cfg.tempalert_ambient_range_enabled
@@ -213,6 +245,7 @@ def get_meater_data() -> MeaterData:
             "ambient_temp_c": cook.ambient_temp_c,
             "target_temp_c": cook.target_temp_c,
             "remaining_time": cook.remaining_time,
+            "remaining_minutes": cook.remaining_minutes,
             "elapsed_time": cook.elapsed_time,
             "status": cook.status,
             "cook_name": cook.cook_name,
@@ -254,6 +287,268 @@ def call_pitmaster(message: str) -> bool:
         return False
 
 
+def _now() -> float:
+    """Return the current wall-clock time as epoch seconds.
+
+    Wall clock (not monotonic) because samples and the pause deadline are
+    persisted across watcher restarts.  Patched in tests to replay a cook.
+
+    Returns:
+        Seconds since the epoch.
+    """
+    return time.time()
+
+
+def _send_alert(send: SyncSender | None, text: str, image_path: str | None = None) -> bool:
+    """Post an alert message to Matrix and report whether it was delivered.
+
+    Args:
+        send: Sync sender, or ``None`` when no messaging backend is attached
+            (then there is nothing to deliver and the alert counts as sent).
+        text: Alert message body.
+        image_path: Optional image to attach.
+
+    Returns:
+        ``True`` if the message was delivered (or there is no backend),
+        ``False`` if sending raised — the caller retries on the next check.
+    """
+    if send is None:
+        return True
+    try:
+        send(text, image_path)
+        return True
+    except Exception as e:
+        logger.error(f"Matrix: Alarm-Nachricht nicht zugestellt ({e}) — neuer Versuch beim naechsten Check: {text!r}")
+        return False
+
+
+def _deliver_once(
+    state: WatcherState,
+    key: str,
+    text: str,
+    send: SyncSender | None,
+    call_text: str | None = None,
+    image_path: str | None = None,
+) -> bool:
+    """Deliver a one-shot alert: Matrix message plus at most one SIP call.
+
+    The caller sets its "already fired" flag only when this returns ``True``,
+    so an undelivered message is retried on the next check.  The SIP call is
+    placed once per alert episode — *key* is remembered in
+    ``state.alert_calls_sent`` until the message got through, so retries do
+    not ring the phone again.
+
+    Args:
+        state: Watcher state (``alert_calls_sent`` is updated).
+        key: Alert identifier, e.g. ``"wrap"``.
+        text: Matrix message body.
+        send: Sync sender (may be ``None``).
+        call_text: Text for the SIP call, or ``None`` for message-only alerts.
+        image_path: Optional image to attach to the message.
+
+    Returns:
+        ``True`` once the message is delivered.
+    """
+    delivered = _send_alert(send, text, image_path)
+    if call_text is not None and key not in state.alert_calls_sent:
+        call_pitmaster(call_text)
+        state.alert_calls_sent.append(key)
+    if delivered:
+        _clear_pending_call(state, key)
+    return delivered
+
+
+def _clear_pending_call(state: WatcherState, key: str) -> None:
+    """Forget that the SIP call for alert *key* was already placed.
+
+    Args:
+        state: Watcher state.
+        key: Alert identifier.
+    """
+    state.alert_calls_sent = [k for k in state.alert_calls_sent if k != key]
+
+
+def _trend_window(
+    samples: list[list[float]],
+    now: float,
+    window_minutes: float,
+    ignore_before: float | None = None,
+) -> list[list[float]] | None:
+    """Select the ``[ts, value]`` samples covering the last *window_minutes*.
+
+    Args:
+        samples: Timestamped readings, oldest first.
+        now: Current epoch seconds.
+        window_minutes: Window length.
+        ignore_before: Samples at or before this epoch are skipped.
+
+    Returns:
+        The samples in the window, or ``None`` if they do not span at least
+        ``WINDOW_MIN_COVERAGE`` of it (too little data, e.g. after a restart,
+        an outage or a disturbance).
+    """
+    window = window_minutes * 60
+    pts = [
+        p for p in samples if p[0] >= now - window * WINDOW_SLACK and (ignore_before is None or p[0] > ignore_before)
+    ]
+    if len(pts) < 2 or pts[-1][0] - pts[0][0] < window * WINDOW_MIN_COVERAGE:
+        return None
+    return pts
+
+
+def _slope_per_hour(pts: list[list[float]]) -> float:
+    """Least-squares slope of ``[ts, value]`` samples in units per hour.
+
+    A regression instead of newest-minus-oldest keeps single noisy readings
+    from dominating.
+
+    Args:
+        pts: At least two samples with distinct timestamps.
+
+    Returns:
+        Slope in value units per hour.
+    """
+    n = len(pts)
+    mean_t = sum(p[0] for p in pts) / n
+    mean_v = sum(p[1] for p in pts) / n
+    num = sum((p[0] - mean_t) * (p[1] - mean_v) for p in pts)
+    den = sum((p[0] - mean_t) ** 2 for p in pts)
+    return num / den * 3600 if den else 0.0
+
+
+def _detect_disturbance(
+    state: WatcherState,
+    now: float,
+    current_internal: float | None,
+    current_ambient: float | None,
+) -> str | None:
+    """Detect a lid-open / wrap / probe-reseat event from the new reading.
+
+    Must run before the current reading is appended to the samples.
+
+    Args:
+        state: Watcher state holding the previous samples.
+        now: Current epoch seconds.
+        current_internal: Current core temperature.
+        current_ambient: Current ambient temperature.
+
+    Returns:
+        A short German reason, or ``None`` if the reading looks undisturbed.
+    """
+    if current_ambient is not None and state.ambient_samples:
+        prev_ambient = state.ambient_samples[-1][1]
+        if prev_ambient - current_ambient >= STALL_DISTURBANCE_AMBIENT_DROP:
+            return f"Ambient-Abfall {prev_ambient:.1f} -> {current_ambient:.1f} C"
+        recent = [p[1] for p in state.ambient_samples if p[0] >= now - STALL_WINDOW_MINUTES * 60 * WINDOW_SLACK]
+        if recent:
+            avg = sum(recent) / len(recent)
+            if avg - current_ambient >= STALL_DISTURBANCE_AMBIENT_DROP:
+                return f"Ambient {current_ambient:.1f} C liegt {avg - current_ambient:.1f} C unter dem Schnitt ({avg:.1f} C)"
+    if current_internal is not None and state.internal_samples:
+        prev_internal = state.internal_samples[-1][1]
+        if prev_internal - current_internal >= STALL_DISTURBANCE_CORE_DROP:
+            return f"Kerntemperatur-Sprung {prev_internal:.1f} -> {current_internal:.1f} C"
+    return None
+
+
+def _append_sample(samples: list[list[float]], now: float, value: float | None) -> list[list[float]]:
+    """Append a reading and drop samples older than the retention period.
+
+    Args:
+        samples: Existing ``[ts, value]`` samples.
+        now: Current epoch seconds.
+        value: New reading (``None`` is not recorded).
+
+    Returns:
+        The pruned sample list including the new reading.
+    """
+    if value is not None:
+        samples = [*samples, [now, value]]
+    return [p for p in samples if p[0] >= now - SAMPLE_RETENTION_SECONDS]
+
+
+def _end_pause(state: WatcherState, now: float) -> None:
+    """End a ``pause`` / ``wrapped`` window.
+
+    Resets the ambient high-water mark (the next reading re-seeds it, so the
+    lid-open dip cannot trigger TempDown) and restarts trend evaluation from
+    now, so the dip does not count as a stall either.
+
+    Args:
+        state: Watcher state.
+        now: Current epoch seconds.
+    """
+    state.pause_until = None
+    state.max_ambient_temp = None
+    state.trend_ignore_before = now
+    state.stall_pause_checks_left = 0
+
+
+def _pause_minutes_left(state: WatcherState, now: float) -> int:
+    """Return the remaining pause time in whole minutes (rounded up).
+
+    Args:
+        state: Watcher state.
+        now: Current epoch seconds.
+
+    Returns:
+        Minutes left, ``0`` when not paused.
+    """
+    if state.pause_until is None:
+        return 0
+    return max(0, math.ceil((state.pause_until - now) / 60))
+
+
+def _remaining_known(remaining: str | None, remaining_minutes: int | None) -> bool:
+    """Tell whether MEATER reported a usable remaining time.
+
+    MEATER sends 0 s (formatted ``"0m"``) or nothing while it has no
+    estimate, e.g. after the probe was re-inserted — that must not read as
+    "done".
+
+    Args:
+        remaining: Formatted remaining time.
+        remaining_minutes: Remaining time in minutes, if parsed.
+
+    Returns:
+        ``True`` if a positive remaining time is known.
+    """
+    if not remaining:
+        return False
+    if remaining_minutes is not None:
+        return remaining_minutes > 0
+    return remaining not in ("0m", "0h 0m") and "estimat" not in remaining.lower()
+
+
+def _forecast_line(state: WatcherState, now: float, current_internal: float | None, target: float | None) -> str | None:
+    """Build the watcher's own ETA forecast line to the pull target.
+
+    Linear trend over the last ``FORECAST_WINDOW_MINUTES`` of core readings.
+
+    Args:
+        state: Watcher state holding the samples.
+        now: Current epoch seconds.
+        current_internal: Current core temperature.
+        target: Effective pull target (override or MEATER target).
+
+    Returns:
+        A clearly labelled forecast line, or ``None`` when there is no target,
+        not enough data, or no meaningful rise.
+    """
+    if current_internal is None or not target or current_internal >= target:
+        return None
+    pts = _trend_window(state.internal_samples, now, FORECAST_WINDOW_MINUTES, state.trend_ignore_before)
+    if pts is None:
+        return None
+    rate = _slope_per_hour(pts)
+    if rate < 0.1:
+        return None
+    eta = datetime.fromtimestamp(now + (target - current_internal) / rate * 3600)
+    fmt = "%H:%M" if eta.date() == datetime.fromtimestamp(now).date() else "%d.%m. %H:%M"
+    span = round((pts[-1][0] - pts[0][0]) / 60)
+    return f"Watcher-Prognose bis {target:.1f} C: ~{eta.strftime(fmt)} (Trend {rate:.1f} C/h ueber {span} Min.)"
+
+
 # ---------------------------------------------------------------------------
 # Alert status summary (for status command)
 # ---------------------------------------------------------------------------
@@ -270,6 +565,13 @@ def _alert_summary(state: WatcherState) -> list[str]:
     """
     lines = []
 
+    # Pause (wrap / lid open) — listed first, it mutes several alerts below
+    if state.pause_until is not None:
+        lines.append(
+            f"Pause: AKTIV (noch {_pause_minutes_left(state, _now())} Min.; TempDown, Stall und "
+            f"Ambient-Bereich stumm; 'resume' beendet)"
+        )
+
     # TempDown
     if state.tempalert_tempdown_enabled:
         lines.append(f"TempDown: AN (Schwelle: {AMBIENT_TEMP_DROP_THRESHOLD} C)")
@@ -284,9 +586,14 @@ def _alert_summary(state: WatcherState) -> list[str]:
 
     # Stall
     if state.tempalert_stall_enabled:
-        s = f"Stall: AN (min. {state.stall_min_delta} C / {STALL_WINDOW} Checks)"
+        s = (
+            f"Stall: AN (Alarm bei < {state.stall_max_rate:g} C/h Anstieg ueber {STALL_WINDOW_MINUTES} Min., "
+            f"Kern {STALL_CORE_MIN:g}-{STALL_CORE_MAX:g} C)"
+        )
         if state.stall_alerted:
             s += " [bereits ausgeloest]"
+        if state.stall_pause_checks_left > 0:
+            s += f" [pausiert nach Stoerung: noch {state.stall_pause_checks_left} Check(s)]"
         lines.append(s)
     else:
         lines.append("Stall: AUS")
@@ -360,19 +667,34 @@ def run_meater_check(
 ) -> str:
     """Fetch MEATER data, evaluate alarms, and update *state* in-place.
 
+    Every alarm posts a Matrix message.  One-shot alarms (stall, wrap,
+    ruhephase, pull, cook-end, offline notice) only mark themselves as fired
+    once that message was delivered; otherwise they are retried on the next
+    check (the SIP call is not repeated for the retry).
+
     Args:
         state: Mutable state; updated with latest temperatures, counters,
             and alert flags.
         send: Optional callable ``(text, image_path_or_None) -> None``
             for posting messages/images to Matrix via the existing session.
+            Must raise when delivery fails.
 
     Returns:
         A human-readable status string suitable for Matrix, or the
         sentinel ``"__cook_ended__"`` when cook-end is detected (signals
         the event loop to shut down).
     """
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = _now()
+    timestamp = datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S")
     logger.info("MEATER Watcher Check")
+
+    # A ``pause`` / ``wrapped`` window that ran out ends here — before the
+    # ambient snapshot below, so the reset high-water mark is re-seeded from
+    # this reading.
+    pause_ended = state.pause_until is not None and now >= state.pause_until
+    if pause_ended:
+        _end_pause(state, now)
+        logger.info("Pause abgelaufen: Alarme wieder aktiv, Max-Ambient zurueckgesetzt.")
 
     max_ambient = state.max_ambient_temp
     max_internal = state.max_internal_temp
@@ -406,15 +728,19 @@ def run_meater_check(
                     f"erreichbar (Cook wurde geloescht oder ist abgelaufen)."
                 )
                 logger.warning(end_msg)
-                if send is not None:
-                    try:
-                        send(end_msg, None)
-                    except Exception:
-                        pass
-                call_pitmaster("MEATER Cook scheint beendet zu sein. " "Die Cook-URL existiert nicht mehr.")
-                state.cook_ended = True
+                # Not delivered -> do not end yet; the next check (still an
+                # error) retries the message.
+                if _deliver_once(
+                    state,
+                    "cookend",
+                    end_msg,
+                    send,
+                    call_text="MEATER Cook scheint beendet zu sein. Die Cook-URL existiert nicht mehr.",
+                ):
+                    state.cook_ended = True
+                    save_state(state)
+                    return "__cook_ended__"
                 save_state(state)
-                return "__cook_ended__"
 
         return msg
 
@@ -435,12 +761,10 @@ def run_meater_check(
         lines.append(f"Time: {timestamp}")
         offline_msg = "\n".join(lines)
 
-        # Post to Matrix only on the transition into offline state.
-        if state.offline_streak == 1 and send is not None:
-            try:
-                send(offline_msg, None)
-            except Exception:
-                pass
+        # Post to Matrix once per outage — retried on the next offline cycle
+        # if it did not get through.
+        if not state.offline_notified and _send_alert(send, offline_msg):
+            state.offline_notified = True
 
         # SIP-escalate once per outage when threshold is reached.
         if (
@@ -460,13 +784,10 @@ def run_meater_check(
     if state.offline_streak > 0:
         recovery_msg = f"✅ MEATER Station wieder online (war {state.offline_streak} Cycle(s) offline)."
         logger.info(recovery_msg)
-        if send is not None:
-            try:
-                send(recovery_msg, None)
-            except Exception:
-                pass
+        _send_alert(send, recovery_msg)
         state.offline_streak = 0
         state.station_offline_call_sent = False
+        state.offline_notified = False
 
     # Reset consecutive error counter on success
     state.consecutive_errors = 0
@@ -479,6 +800,7 @@ def run_meater_check(
     cook_status = data.get("status", "unknown")
     cook_name = data.get("cook_name", "Unknown")
     screenshot: str = data.get("screenshot") or f"/data/meater-screenshot-{MEATER_UUID}.png"
+    paused = state.pause_until is not None
 
     # Update max values
     if current_ambient is not None:
@@ -488,14 +810,23 @@ def run_meater_check(
         if max_internal is None or current_internal > max_internal:
             max_internal = current_internal
 
-    # Track internal temp history for stall detection
-    history = state.internal_temp_history
-    if current_internal is not None:
-        history.append(current_internal)
-        # Keep only last STALL_WINDOW + 1 entries
-        if len(history) > STALL_WINDOW + 1:
-            history = history[-(STALL_WINDOW + 1) :]
-        state.internal_temp_history = history
+    # Disturbance check (against the previous readings), then record the
+    # timestamped samples used for the stall rate and the ETA forecast.
+    # After a disturbance the trend restarts from the next reading and the
+    # stall evaluation sits out a few checks.
+    disturbance = _detect_disturbance(state, now, current_internal, current_ambient)
+    state.internal_samples = _append_sample(state.internal_samples, now, current_internal)
+    state.ambient_samples = _append_sample(state.ambient_samples, now, current_ambient)
+    stall_cooling_down = False
+    if disturbance:
+        logger.info(f"Stoerereignis erkannt ({disturbance}) — Trend/Stall-Bewertung startet neu.")
+        state.trend_ignore_before = now
+        state.stall_pause_checks_left = STALL_DISTURBANCE_PAUSE_CHECKS
+    elif state.stall_pause_checks_left > 0:
+        state.stall_pause_checks_left -= 1
+        stall_cooling_down = True
+
+    effective_target = state.target_override if state.target_override is not None else target_temp
 
     # Build status text
     lines = [f"MEATER Status: {cook_name}", f"URL: {MEATER_URL}"]
@@ -503,14 +834,22 @@ def run_meater_check(
         lines.append(f"Internal (Fleisch): {current_internal:.1f} C")
     if current_ambient is not None:
         lines.append(f"Ambient (Rauch): {current_ambient:.1f} C")
-    if target_temp is not None:
+    if state.target_override is not None:
+        meater_target = f"{target_temp:.1f} C" if target_temp is not None else "unbekannt"
+        lines.append(f"Target: {meater_target} (MEATER) → Pull bei {state.target_override:.1f} C (aktiv)")
+    elif target_temp is not None:
         lines.append(f"Target: {target_temp:.1f} C")
     if max_ambient is not None:
         lines.append(f"Max Ambient: {max_ambient:.1f} C")
     if max_internal is not None:
         lines.append(f"Max Internal: {max_internal:.1f} C")
-    if remaining:
+    if _remaining_known(remaining, data.get("remaining_minutes")):
         lines.append(f"Remaining: {remaining}")
+    else:
+        lines.append("Remaining: unbekannt (MEATER liefert gerade keine Restzeit)")
+    forecast = _forecast_line(state, now, current_internal, effective_target)
+    if forecast:
+        lines.append(forecast)
     if elapsed:
         lines.append(f"Elapsed: {elapsed}")
     lines.append(f"Status: {cook_status}")
@@ -518,6 +857,8 @@ def run_meater_check(
     # suddenly went away.
     if data.get("source") == "browser":
         lines.append("Quelle: Browser-Fallback (nur ganze Grad)")
+    if pause_ended:
+        lines.append("Pause beendet: TempDown/Stall/Ambient-Bereich wieder aktiv, Max-Ambient zurueckgesetzt.")
     lines.append("---")
     lines.extend(_alert_summary(state))
     lines.append(f"Time: {timestamp}")
@@ -536,8 +877,9 @@ def run_meater_check(
     # ALERTS
     # ===================================================================
 
-    # 1) Ambient temperature drop (tempdown / fire out)
-    if state.tempalert_tempdown_enabled:
+    # 1) Ambient temperature drop (tempdown / fire out) — repeats every check
+    #    while the drop persists; muted during ``pause``.
+    if state.tempalert_tempdown_enabled and not paused:
         if max_ambient is not None and current_ambient is not None:
             ambient_drop = max_ambient - current_ambient
             if ambient_drop >= AMBIENT_TEMP_DROP_THRESHOLD:
@@ -547,6 +889,7 @@ def run_meater_check(
                     f"Feuer koennte ausgegangen sein!"
                 )
                 logger.warning(f"ALARM TempDown: {alarm_msg}")
+                _send_alert(send, alarm_msg)
                 call_pitmaster(alarm_msg)
 
     # 2) Ruhephase (cooldown monitoring)
@@ -558,34 +901,43 @@ def run_meater_check(
                 f"Ziel-Abkuehltemperatur ({rp_target} C) erreicht."
             )
             logger.warning(f"ALARM Ruhephase: {alarm_msg}")
-            call_pitmaster(alarm_msg)
-            state.tempalert_ruhephase_enabled = False
-            logger.info("Ruhephase-Alert automatisch deaktiviert.")
+            if _deliver_once(state, "ruhephase", alarm_msg, send, call_text=alarm_msg):
+                state.tempalert_ruhephase_enabled = False
+                logger.info("Ruhephase-Alert automatisch deaktiviert.")
 
-    # 3) Stall detection
-    if state.tempalert_stall_enabled and not state.stall_alerted:
-        min_delta = state.stall_min_delta
-        if len(history) > STALL_WINDOW:
-            oldest = history[-(STALL_WINDOW + 1)]
-            newest = history[-1]
-            rise = newest - oldest
-            if rise < min_delta:
+    # 3) Stall detection: rise rate over a time window inside the plausible
+    #    core range.  Falling temperatures, disturbances and ``pause`` are
+    #    no stall.
+    if state.tempalert_stall_enabled and not (disturbance or stall_cooling_down or paused):
+        pts = _trend_window(state.internal_samples, now, STALL_WINDOW_MINUTES, state.trend_ignore_before)
+        if pts is not None:
+            rate = _slope_per_hour(pts)
+            max_rate = state.stall_max_rate
+            if state.stall_alerted:
+                if rate >= max_rate * 2:
+                    # Stall seems to be over — re-arm so it can trigger again
+                    logger.info(f"Stall vorbei ({rate:.1f} C/h) — Stall-Alert wieder scharf.")
+                    state.stall_alerted = False
+            elif (
+                current_internal is not None
+                and STALL_CORE_MIN <= current_internal <= STALL_CORE_MAX
+                and 0 <= rate < max_rate
+            ):
+                span = round((pts[-1][0] - pts[0][0]) / 60)
                 alarm_msg = (
-                    f"Stall erkannt! Interne Temperatur ist in den letzten "
-                    f"{STALL_WINDOW} Checks nur um {rise:.1f} C gestiegen "
-                    f"(von {oldest:.1f} C auf {newest:.1f} C). Jetzt wrappen?"
+                    f"Stall erkannt! Interne Temperatur steigt nur um {rate:.1f} C/h "
+                    f"(Schwelle {max_rate:g} C/h; letzte {span} Min. von {pts[0][1]:.1f} C "
+                    f"auf {pts[-1][1]:.1f} C)."
                 )
+                # Once the wrap reminder fired or the user reported ``wrapped``,
+                # asking to wrap again is wrong.
+                if state.wrap_alerted:
+                    alarm_msg += " Bereits gewrappt — Smoker-Temperatur pruefen und Geduld."
+                else:
+                    alarm_msg += " Jetzt wrappen?"
                 logger.warning(f"ALARM Stall: {alarm_msg}")
-                call_pitmaster(alarm_msg)
-                if send is not None:
-                    try:
-                        send(f"STALL ERKANNT: {alarm_msg}", None)
-                    except Exception:
-                        pass
-                state.stall_alerted = True
-            elif rise >= min_delta * 2:
-                # Stall seems to be over — reset so it can trigger again
-                state.stall_alerted = False
+                if _deliver_once(state, "stall", f"STALL ERKANNT: {alarm_msg}", send, call_text=alarm_msg):
+                    state.stall_alerted = True
 
     # 4) Wrap reminder
     if state.tempalert_wrap_enabled and state.wrap_target_temp is not None and not state.wrap_alerted:
@@ -596,50 +948,47 @@ def run_meater_check(
                 f"(Ziel: {wrap_temp} C). Jetzt in Butcher Paper/Folie einwickeln!"
             )
             logger.warning(f"ALARM Wrap: {alarm_msg}")
-            call_pitmaster(alarm_msg)
-            state.wrap_alerted = True
+            if _deliver_once(state, "wrap", alarm_msg, send, call_text=alarm_msg):
+                state.wrap_alerted = True
 
-    # 5) Ambient range (too hot / too cold)
-    if state.tempalert_ambient_range_enabled and current_ambient is not None:
+    # 5) Ambient range (too hot / too cold) — repeats every check; muted
+    #    during ``pause``.
+    if state.tempalert_ambient_range_enabled and current_ambient is not None and not paused:
         lo = state.ambient_range_min
         hi = state.ambient_range_max
         if lo is not None and current_ambient < lo:
             alarm_msg = f"Ambient zu niedrig! {current_ambient:.1f} C unter Minimum {lo} C. " f"Feuer nachschueren!"
             logger.warning(f"ALARM Ambient-Bereich: {alarm_msg}")
+            _send_alert(send, alarm_msg)
             call_pitmaster(alarm_msg)
         if hi is not None and current_ambient > hi:
             alarm_msg = f"Ambient zu hoch! {current_ambient:.1f} C ueber Maximum {hi} C. " f"Luftzufuhr reduzieren!"
             logger.warning(f"ALARM Ambient-Bereich: {alarm_msg}")
+            _send_alert(send, alarm_msg)
             call_pitmaster(alarm_msg)
 
     # 6) Target temperature reached.  A user-defined ``target_override`` (the
     #    "pull / take out now" temperature) takes precedence over the MEATER
-    #    target; when set, the room is also notified, not just the phone.
-    effective_target = state.target_override if state.target_override is not None else target_temp
+    #    target.  Up to 3 notifications (message + call); one only counts once
+    #    its message was delivered.
     if current_internal and effective_target and current_internal >= effective_target:
         logger.warning("ZIELTEMPERATUR ERREICHT!")
         if target_reached_calls < 3:
-            try:
-                if state.target_override is not None:
-                    alarm_msg = (
-                        f"Rausnehmen! Deine Ziel-Kerntemperatur von {effective_target:.1f} C ist "
-                        f"erreicht (aktuell {current_internal:.1f} C). Fleisch jetzt entnehmen!"
-                    )
-                    logger.warning(f"ALARM Pull: {alarm_msg}")
-                    if send is not None:
-                        try:
-                            send(alarm_msg, None)
-                        except Exception:
-                            pass
-                    call_pitmaster(alarm_msg)
-                else:
-                    call_pitmaster(
-                        f"Brisket ist fertig! Zieltemperatur von {effective_target:.1f} C erreicht. "
-                        f"Aktuelle Temperatur: {current_internal:.1f} C"
-                    )
+            if state.target_override is not None:
+                alarm_msg = (
+                    f"Rausnehmen! Deine Ziel-Kerntemperatur von {effective_target:.1f} C ist "
+                    f"erreicht (aktuell {current_internal:.1f} C). Fleisch jetzt entnehmen!"
+                )
+                logger.warning(f"ALARM Pull: {alarm_msg}")
+            else:
+                alarm_msg = (
+                    f"Brisket ist fertig! Zieltemperatur von {effective_target:.1f} C erreicht. "
+                    f"Aktuelle Temperatur: {current_internal:.1f} C"
+                )
+            delivered = _send_alert(send, alarm_msg)
+            call_pitmaster(alarm_msg)
+            if delivered:
                 target_reached_calls += 1
-            except Exception as e:
-                logger.error(f"Target-reached call failed: {e}")
 
     # 7) Cook-end detection: probe removed (temp drops to near room temp)
     if state.tempalert_cookend_enabled and not state.cook_ended:
@@ -654,33 +1003,37 @@ def run_meater_check(
                 f"(Max war {max_internal:.1f} C). Probe wurde vermutlich entfernt."
             )
             logger.warning(end_msg)
-            if send is not None:
-                try:
-                    send(end_msg, None)
-                except Exception:
-                    pass
-            call_pitmaster("MEATER Probe wurde vermutlich entfernt. Cook ist beendet.")
-            state.cook_ended = True
+            if _deliver_once(
+                state,
+                "cookend",
+                end_msg,
+                send,
+                call_text="MEATER Probe wurde vermutlich entfernt. Cook ist beendet.",
+            ):
+                state.cook_ended = True
 
         # Also detect meater-monitor status "done"
         if cook_status == "done" and not state.cook_ended:
-            end_msg = f"Cook-Ende erkannt: MEATER meldet Status 'done'."
+            end_msg = "Cook-Ende erkannt: MEATER meldet Status 'done'."
             logger.warning(end_msg)
-            state.cook_ended = True
+            if _deliver_once(state, "cookend", end_msg, send):
+                state.cook_ended = True
 
         # Also detect meater cloud "finished" state (cook page shows summary)
         if cook_status == "finished" and not state.cook_ended:
             end_msg = "Cook-Ende erkannt: MEATER Cloud zeigt Cook als beendet an."
             logger.warning(end_msg)
-            if send is not None:
-                try:
-                    send(end_msg, screenshot)
-                except Exception:
-                    pass
-            call_pitmaster("MEATER Cook ist offiziell beendet laut MEATER Cloud.")
-            state.cook_ended = True
-            save_state(state)
-            return "__cook_ended__"
+            if _deliver_once(
+                state,
+                "cookend",
+                end_msg,
+                send,
+                call_text="MEATER Cook ist offiziell beendet laut MEATER Cloud.",
+                image_path=screenshot,
+            ):
+                state.cook_ended = True
+                save_state(state)
+                return "__cook_ended__"
 
     # Internal temperature change info
     if last_internal is not None and current_internal is not None:
@@ -715,7 +1068,7 @@ def run_meater_check(
 # Help text
 # ---------------------------------------------------------------------------
 
-HELP_TEXT: str = """\
+HELP_TEXT: str = f"""\
 MEATER Watcher Befehle:
 
 status                    - Aktuellen Status abrufen
@@ -723,7 +1076,9 @@ enable tempdown           - Temperaturabfall-Alert AN
 disable tempdown          - Temperaturabfall-Alert AUS
 enable ruhephase <temp>   - Ruhephase-Alert AN (Zieltemp in C; schaltet TempDown automatisch AUS)
 disable ruhephase         - Ruhephase-Alert AUS
-enable stall [<delta>]    - Stall-Erkennung AN (opt: min. Anstieg in C)
+enable stall [<rate>]     - Stall-Erkennung AN (opt: Schwelle in C/h, Standard {cfg.alerts.stall_max_rate:g}; Alarm wenn der Kern
+                            ueber {STALL_WINDOW_MINUTES} Min. langsamer steigt, nur bei {STALL_CORE_MIN:g}-{STALL_CORE_MAX:g} C,
+                            Abfall zaehlt nicht)
 disable stall             - Stall-Erkennung AUS
 enable wrap <temp>        - Wrap-Reminder AN (bei Kerntemp in C)
 disable wrap              - Wrap-Reminder AUS
@@ -738,6 +1093,10 @@ disable offline           - Station-Offline-Alert AUS
 reset stall               - Stall-Alert zuruecksetzen
 reset wrap                - Wrap-Alert zuruecksetzen
 reset ambient             - Max-Ambient-Hoechstwert zuruecksetzen
+pause [<min>]             - Deckel auf/Wrappen: TempDown, Stall, Ambient-Bereich stumm (Standard {PAUSE_DEFAULT_MINUTES} Min.),
+                            danach Max-Ambient automatisch zurueckgesetzt (Pull/Offline/Cook-Ende bleiben aktiv)
+wrapped [<min>]           - Wie pause, markiert zusaetzlich Wrap als erledigt
+resume                    - Pause vorzeitig beenden
 testcall [<text>]         - Testanruf bei Pitmaster mit beliebigem Text
 set interval <sek>        - Check-Intervall in Sekunden setzen
 reset interval            - Check-Intervall auf Standard zuruecksetzen
@@ -800,6 +1159,7 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         target = float(m.group(1))
         state.tempalert_ruhephase_enabled = True
         state.ruhephase_target_temp = target
+        _clear_pending_call(state, "ruhephase")
         logger.info(f"Ruhephase-Alert aktiviert (Ziel-Abkuehltemperatur: {target} C).")
         reply = f"Ruhephase-Alert aktiviert. Ziel-Abkuehltemperatur: {target} C"
 
@@ -828,30 +1188,37 @@ def handle_command(body: str, state: WatcherState) -> str | None:
 
     if text in ("disable ruhephase", "ruhephase aus", "ruhephase off", "ruhephase disable"):
         state.tempalert_ruhephase_enabled = False
+        _clear_pending_call(state, "ruhephase")
         save_state(state)
         return "Ruhephase-Alert deaktiviert."
 
     # --- enable/disable stall ---
+    # The optional number is the rise-rate threshold in C/h (formerly a raw
+    # per-window delta); the syntax is unchanged.
     m = re.match(r"(?:enable stall|stall an|stall on|stall enable)(?:\s+(\d+(?:\.\d+)?))?$", text)
     if m:
-        delta = float(m.group(1)) if m.group(1) else 0.3
+        rate = float(m.group(1)) if m.group(1) else cfg.alerts.stall_max_rate
         state.tempalert_stall_enabled = True
-        state.stall_min_delta = delta
+        state.stall_max_rate = rate
         state.stall_alerted = False
+        _clear_pending_call(state, "stall")
         save_state(state)
         return (
-            f"Stall-Erkennung aktiviert. Alarm wenn Kerntemperatur in "
-            f"{STALL_WINDOW} Checks weniger als {delta} C steigt."
+            f"Stall-Erkennung aktiviert. Alarm wenn die Kerntemperatur ueber {STALL_WINDOW_MINUTES} Min. "
+            f"langsamer als {rate:g} C/h steigt (nur bei {STALL_CORE_MIN:g}-{STALL_CORE_MAX:g} C Kern; "
+            f"Temperaturabfall und Stoerungen wie Deckel auf zaehlen nicht)."
         )
 
     if text in ("disable stall", "stall aus", "stall off", "stall disable"):
         state.tempalert_stall_enabled = False
         state.stall_alerted = False
+        _clear_pending_call(state, "stall")
         save_state(state)
         return "Stall-Erkennung deaktiviert."
 
     if text == "reset stall":
         state.stall_alerted = False
+        _clear_pending_call(state, "stall")
         save_state(state)
         return "Stall-Alert zurueckgesetzt. Kann erneut ausloesen."
 
@@ -862,17 +1229,20 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         state.tempalert_wrap_enabled = True
         state.wrap_target_temp = temp
         state.wrap_alerted = False
+        _clear_pending_call(state, "wrap")
         save_state(state)
         return f"Wrap-Reminder aktiviert. Alarm bei Kerntemperatur {temp} C."
 
     if text in ("disable wrap", "wrap aus", "wrap off", "wrap disable"):
         state.tempalert_wrap_enabled = False
         state.wrap_alerted = False
+        _clear_pending_call(state, "wrap")
         save_state(state)
         return "Wrap-Reminder deaktiviert."
 
     if text == "reset wrap":
         state.wrap_alerted = False
+        _clear_pending_call(state, "wrap")
         save_state(state)
         return "Wrap-Alert zurueckgesetzt. Kann erneut ausloesen."
 
@@ -929,11 +1299,41 @@ def handle_command(body: str, state: WatcherState) -> str | None:
             f"den Hoechstwert neu — TempDown-Alert misst ab dann von vorne."
         )
 
+    # --- pause / wrapped / resume (lid open, wrapping) ---
+    m = re.match(r"(pause|pausieren|deckel|wrapped|gewrappt)(?:\s+(\d+))?$", text)
+    if m:
+        minutes = int(m.group(2)) if m.group(2) else PAUSE_DEFAULT_MINUTES
+        if minutes <= 0:
+            return "Fehler: Pause muss mindestens 1 Minute dauern."
+        state.pause_until = _now() + minutes * 60
+        reply = (
+            f"Pause fuer {minutes} Min.: TempDown, Stall und Ambient-Bereich sind stumm. "
+            f"Danach wird Max-Ambient automatisch zurueckgesetzt. Pull-, Offline- und "
+            f"Cook-Ende-Alarm bleiben aktiv. Vorzeitig beenden mit 'resume'."
+        )
+        if m.group(1) in ("wrapped", "gewrappt"):
+            state.wrap_alerted = True
+            _clear_pending_call(state, "wrap")
+            reply += "\nWrap als erledigt markiert."
+        save_state(state)
+        return reply
+
+    if text in ("resume", "weiter", "pause aus", "pause off", "pause beenden"):
+        if state.pause_until is None:
+            return "Keine Pause aktiv."
+        _end_pause(state, _now())
+        save_state(state)
+        return (
+            "Pause beendet: TempDown, Stall und Ambient-Bereich wieder aktiv. Max-Ambient "
+            "zurueckgesetzt — der naechste Check setzt den Hoechstwert neu."
+        )
+
     # --- enable/disable cookend ---
     if text in ("enable cookend", "cookend an", "cookend on", "cookend enable"):
         state.tempalert_cookend_enabled = True
         state.cook_ended = False
         state.consecutive_errors = 0
+        _clear_pending_call(state, "cookend")
         save_state(state)
         return "Cook-Ende-Erkennung aktiviert."
 
@@ -1123,19 +1523,27 @@ async def event_loop(
         """Send text and optional image to all target rooms synchronously.
 
         Bridges the sync ``run_meater_check`` world to the async messaging
-        backend by scheduling coroutines on the running event loop.
+        backend by scheduling coroutines on the running event loop.  Text is
+        sent in strict mode so a failed delivery raises and alerts get
+        retried; a failed image upload is only logged (the text is out).
 
         Args:
             text: Message body to send.
             image_path: Optional filesystem path to an image to attach.
+
+        Raises:
+            Exception: If the text could not be delivered to every target room.
         """
         targets = room_ids if room_ids else messaging.get_rooms()
         for rid in targets:
-            fut = asyncio.run_coroutine_threadsafe(messaging.send_message(rid, text), loop)
+            fut = asyncio.run_coroutine_threadsafe(messaging.send_message(rid, text, strict=True), loop)
             fut.result(timeout=30)
             if image_path:
                 fut2 = asyncio.run_coroutine_threadsafe(messaging.send_image(rid, image_path), loop)
-                fut2.result(timeout=90)
+                try:
+                    fut2.result(timeout=90)
+                except Exception as e:
+                    logger.error(f"Matrix: Bild-Upload an {rid} fehlgeschlagen: {e}")
 
     # Initial MEATER check — now that Matrix is connected, post the current
     # status (text + screenshot) through the same sender used for periodic
@@ -1215,13 +1623,23 @@ async def event_loop(
 
     # --- Periodic check task ---
     async def periodic_check() -> None:
-        """Run MEATER checks at regular intervals until stopped."""
+        """Run MEATER checks on a fixed schedule until stopped.
+
+        Deadlines live on the loop's monotonic clock and advance by the
+        interval from the previous *deadline*, not from when the check
+        finished — so fetch and screenshot time no longer add up as drift.
+        A check that overruns whole slots skips them instead of bunching up.
+        """
+        next_due = loop.time() + effective_check_interval(state)
         while not stop_event.is_set():
-            interval = effective_check_interval(state)
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+                await asyncio.wait_for(stop_event.wait(), timeout=max(0.0, next_due - loop.time()))
                 break
             except asyncio.TimeoutError:
+                interval = effective_check_interval(state)
+                next_due += interval
+                while next_due <= loop.time():
+                    next_due += interval
                 logger.info(f"Periodischer Check (alle {interval}s)...")
                 check_result = await asyncio.to_thread(run_meater_check, state, _send_via_messaging)
                 if check_result == "__cook_ended__":

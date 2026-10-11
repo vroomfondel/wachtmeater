@@ -67,11 +67,23 @@ class TestFromEnvironUsesDefaults:
         assert cfg.screenshot_dir == "/data"
 
     def test_monitoring_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        for key in ("CHECK_INTERVAL", "STALL_WINDOW", "AMBIENT_TEMP_DROP_THRESHOLD"):
+        for key in (
+            "CHECK_INTERVAL",
+            "STALL_WINDOW_MINUTES",
+            "STALL_CORE_MIN",
+            "STALL_CORE_MAX",
+            "STALL_DISTURBANCE_PAUSE_CHECKS",
+            "PAUSE_DEFAULT_MINUTES",
+            "AMBIENT_TEMP_DROP_THRESHOLD",
+        ):
             monkeypatch.delenv(key, raising=False)
         cfg = MonitoringConfig.from_environ()
         assert cfg.check_interval == 600
-        assert cfg.stall_window == 3
+        assert cfg.stall_window_minutes == 30
+        assert cfg.stall_core_min == 60.0
+        assert cfg.stall_core_max == 82.0
+        assert cfg.stall_disturbance_pause_checks == 2
+        assert cfg.pause_default_minutes == 20
         assert cfg.ambient_temp_drop_threshold == 10
 
 
@@ -82,7 +94,7 @@ class TestAlertDefaultsConfig:
             "ALERT_DEFAULT_RUHEPHASE_ENABLED",
             "ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP",
             "ALERT_DEFAULT_STALL_ENABLED",
-            "ALERT_DEFAULT_STALL_MIN_DELTA",
+            "ALERT_DEFAULT_STALL_MAX_RATE",
             "ALERT_DEFAULT_WRAP_ENABLED",
             "ALERT_DEFAULT_WRAP_TARGET_TEMP",
             "ALERT_DEFAULT_AMBIENT_RANGE_ENABLED",
@@ -96,7 +108,7 @@ class TestAlertDefaultsConfig:
         assert cfg.tempalert_ruhephase_enabled is False
         assert cfg.ruhephase_target_temp == 0.0
         assert cfg.tempalert_stall_enabled is False
-        assert cfg.stall_min_delta == 0.3
+        assert cfg.stall_max_rate == 4.0
         assert cfg.tempalert_wrap_enabled is False
         assert cfg.wrap_target_temp == 0.0
         assert cfg.tempalert_ambient_range_enabled is False
@@ -106,11 +118,11 @@ class TestAlertDefaultsConfig:
 
     def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ALERT_DEFAULT_STALL_ENABLED", "true")
-        monkeypatch.setenv("ALERT_DEFAULT_STALL_MIN_DELTA", "2.5")
+        monkeypatch.setenv("ALERT_DEFAULT_STALL_MAX_RATE", "2.5")
         monkeypatch.setenv("ALERT_DEFAULT_TEMPDOWN_ENABLED", "false")
         cfg = AlertDefaultsConfig.from_environ()
         assert cfg.tempalert_stall_enabled is True
-        assert cfg.stall_min_delta == pytest.approx(2.5)
+        assert cfg.stall_max_rate == pytest.approx(2.5)
         assert cfg.tempalert_tempdown_enabled is False
 
 
