@@ -169,7 +169,7 @@ def test_pause_at_0530_suppresses_tempdown() -> None:
 def test_wrapped_marks_wrap_done_and_suppresses_tempdown() -> None:
     r = Replay()
     r.state.tempalert_wrap_enabled = False  # user wraps by hand, no reminder
-    r.run(len(CORE), commands={36: ["wrapped"]})
+    r.run(len(CORE), commands={36: ["wrapped 20"]})
     assert r.state.wrap_alerted is True
     assert r.alerts("ACHTUNG: Smoker Temperatur") == []
 

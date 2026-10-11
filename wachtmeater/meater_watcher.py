@@ -37,9 +37,11 @@ Supported Matrix commands (case-insensitive):
       for *min* minutes (default 20), e.g. while wrapping; the ambient
       high-water mark is reset when the pause ends.  Pull, offline and
       cook-end alerts stay active.
-    - ``wrapped [<min>]``           — Like ``pause`` and marks the wrap as done;
-      also anchors the end-phase forecast (exponential fit, see
-      ``wachtmeater.core_forecast``).
+    - ``wrapped [<min>]``           — Marks the wrap as done and anchors the
+      end-phase forecast (exponential fit, see ``wachtmeater.core_forecast``);
+      with *min* it also pauses like ``pause``.
+    - ``wrapped at HH:MM``          — Same, backdated to the last HH:MM (no
+      pause), for reporting the wrap afterwards.
     - ``set pit <temp>``            — Real smoker temperature in C for the
       end-phase forecast (default from config, 110 C).
     - ``reset pit``                 — Back to the config default.
@@ -68,7 +70,7 @@ import os
 import re
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -140,7 +142,7 @@ STALL_DISTURBANCE_PAUSE_CHECKS: int = cfg.monitoring.stall_disturbance_pause_che
 # alert for hours.  0 = track from the first reading.
 TEMPDOWN_WARMUP_CORE_TEMP: float = cfg.monitoring.tempdown_warmup_core_temp
 
-# ``pause`` / ``wrapped`` default duration
+# ``pause`` default duration
 PAUSE_DEFAULT_MINUTES: int = cfg.monitoring.pause_default_minutes
 
 # Watcher's own ETA forecast (linear trend) window
@@ -584,6 +586,49 @@ def _clock(ts: float, now: float) -> str:
     return dt.strftime("%H:%M" if dt.date() == datetime.fromtimestamp(now).date() else "%d.%m. %H:%M")
 
 
+def _last_clock_time(hour: int, minute: int, now: float) -> float:
+    """Return the most recent local wall-clock time ``hour:minute`` not after *now*.
+
+    Args:
+        hour: Hour of day (0-23).
+        minute: Minute (0-59).
+        now: Current epoch seconds.
+
+    Returns:
+        Epoch seconds of today's ``hour:minute``, or yesterday's when today's
+        lies in the future.
+    """
+    now_dt = datetime.fromtimestamp(now)
+    dt = now_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if dt > now_dt:
+        dt -= timedelta(days=1)
+    return dt.timestamp()
+
+
+def _mark_wrapped(state: WatcherState, wrapped_at: float) -> str:
+    """Mark the wrap as done and anchor the end-phase forecast at *wrapped_at*.
+
+    Args:
+        state: Watcher state (mutated, not saved).
+        wrapped_at: Epoch of the wrap — now, or backdated via ``wrapped at``.
+
+    Returns:
+        The confirmation text for Matrix.
+    """
+    now = _now()
+    state.wrap_alerted = True
+    state.wrapped_at = wrapped_at
+    _clear_pending_call(state, "wrap")
+    earliest = _endphase_earliest(state)
+    assert earliest is not None  # wrapped_at was just set
+    return (
+        f"Wrap als erledigt markiert ({_clock(wrapped_at, now)}). Endphasen-Prognose sucht ab "
+        f"{_clock(earliest, now)} den Beginn der gleichmaessigen Endphase "
+        f"(Pit {effective_pit_temp(state):g} C; aendern mit 'set pit <C>'), Prognose fruehestens "
+        f"nach {ENDPHASE_MIN_MINUTES} Min. Daten."
+    )
+
+
 def _endphase_earliest(state: WatcherState) -> float | None:
     """Return the earliest epoch the end-phase fit may start at.
 
@@ -735,6 +780,40 @@ def _forecast_line(state: WatcherState, now: float, current_internal: float | No
     return f"Watcher-Prognose bis {target:.1f} C: {when} (Trend {rate:.1f} C/h ueber {span} Min.)"
 
 
+def _eta_lines(
+    state: WatcherState,
+    now: float,
+    data: MeaterData,
+    current_internal: float | None,
+    target: float | None,
+) -> list[str]:
+    """Build all remaining-time lines: MEATER's estimate plus own forecasts.
+
+    Shared by the full status message and the compact ``eta`` reply.
+
+    Args:
+        state: Current watcher state (samples, wrap time, pit temp).
+        now: Current epoch time.
+        data: The MEATER reading of this check.
+        current_internal: Current core temperature in C.
+        target: Effective pull target in C (override or MEATER target).
+
+    Returns:
+        The ``Remaining:`` line, followed by the watcher's trend forecast and
+        the end-phase forecast block when available.
+    """
+    remaining = data.get("remaining_time")
+    if _remaining_known(remaining, data.get("remaining_minutes")):
+        lines = [f"Remaining: {remaining}"]
+    else:
+        lines = ["Remaining: unbekannt (MEATER liefert gerade keine Restzeit)"]
+    forecast = _forecast_line(state, now, current_internal, target)
+    if forecast:
+        lines.append(forecast)
+    lines.extend(_endphase_lines(state, now, current_internal, target))
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Alert status summary (for status command)
 # ---------------------------------------------------------------------------
@@ -857,6 +936,7 @@ def _alert_summary(state: WatcherState) -> list[str]:
 def run_meater_check(
     state: WatcherState,
     send: SyncSender | None = None,
+    eta_only: bool = False,
 ) -> str:
     """Fetch MEATER data, evaluate alarms, and update *state* in-place.
 
@@ -871,6 +951,9 @@ def run_meater_check(
         send: Optional callable ``(text, image_path_or_None) -> None``
             for posting messages/images to Matrix via the existing session.
             Must raise when delivery fails.
+        eta_only: When ``True`` (``eta`` command), the check runs as usual
+            but posts only a compact remaining-time message without a
+            screenshot instead of the full status.
 
     Returns:
         A human-readable status string suitable for Matrix, or the
@@ -988,7 +1071,6 @@ def run_meater_check(
     current_internal = data.get("internal_temp_c")
     current_ambient = data.get("ambient_temp_c")
     target_temp = data.get("target_temp_c")
-    remaining = data.get("remaining_time")
     elapsed = data.get("elapsed_time")
     cook_status = data.get("status", "unknown")
     cook_name = data.get("cook_name", "Unknown")
@@ -1043,14 +1125,8 @@ def run_meater_check(
         lines.append(f"Max Ambient: {max_ambient:.1f} C")
     if max_internal is not None:
         lines.append(f"Max Internal: {max_internal:.1f} C")
-    if _remaining_known(remaining, data.get("remaining_minutes")):
-        lines.append(f"Remaining: {remaining}")
-    else:
-        lines.append("Remaining: unbekannt (MEATER liefert gerade keine Restzeit)")
-    forecast = _forecast_line(state, now, current_internal, effective_target)
-    if forecast:
-        lines.append(forecast)
-    lines.extend(_endphase_lines(state, now, current_internal, effective_target))
+    eta_lines = _eta_lines(state, now, data, current_internal, effective_target)
+    lines.extend(eta_lines)
     if elapsed:
         lines.append(f"Elapsed: {elapsed}")
     lines.append(f"Status: {cook_status}")
@@ -1070,7 +1146,15 @@ def run_meater_check(
     # Post to Matrix
     if send is not None:
         try:
-            send(status_text, screenshot)
+            if eta_only:
+                eta_head = [f"MEATER ETA: {cook_name}"]
+                if current_internal is not None:
+                    eta_head.append(f"Internal (Fleisch): {current_internal:.1f} C")
+                if effective_target is not None:
+                    eta_head.append(f"Target: {effective_target:.1f} C")
+                send("\n".join(eta_head + eta_lines + [f"Time: {timestamp}"]), None)
+            else:
+                send(status_text, screenshot)
         except Exception as e:
             logger.error(f"Matrix: unexpected error ({e})")
 
@@ -1273,6 +1357,7 @@ HELP_TEXT: str = f"""\
 MEATER Watcher Befehle:
 
 status                    - Aktuellen Status abrufen
+eta                       - Nur Restzeit/Prognosen abrufen (MEATER-Restzeit, Watcher-Trend, Endphase)
 enable tempdown           - Temperaturabfall-Alert AN
 disable tempdown          - Temperaturabfall-Alert AUS
 enable ruhephase <temp>   - Ruhephase-Alert AN (Zieltemp in C; schaltet TempDown automatisch AUS)
@@ -1296,8 +1381,9 @@ reset wrap                - Wrap-Alert zuruecksetzen
 reset ambient             - Max-Ambient-Hoechstwert zuruecksetzen
 pause [<min>]             - Deckel auf/Wrappen: TempDown, Stall, Ambient-Bereich stumm (Standard {PAUSE_DEFAULT_MINUTES} Min.),
                             danach Max-Ambient automatisch zurueckgesetzt (Pull/Offline/Cook-Ende bleiben aktiv)
-wrapped [<min>]           - Wie pause, markiert zusaetzlich Wrap als erledigt und startet die
-                            Endphasen-Prognose (Fit-Start adaptiv, fruehestens {ENDPHASE_SETTLE_MINUTES} Min. nach dem Wrap)
+wrapped [<min>]           - Markiert Wrap als erledigt und startet die Endphasen-Prognose (Fit-Start adaptiv,
+                            fruehestens {ENDPHASE_SETTLE_MINUTES} Min. nach dem Wrap); mit <min> zusaetzlich wie pause
+wrapped at HH:MM          - Wrap nachtragen: wie wrapped, aber rueckdatiert auf HH:MM (ohne Pause)
 set pit <temp>            - Echte Smokertemperatur in C fuer die Endphasen-Prognose (Standard {PIT_TEMP_DEFAULT:g})
 reset pit                 - Smokertemperatur auf Standard zuruecksetzen
 resume                    - Pause vorzeitig beenden
@@ -1306,7 +1392,7 @@ set interval <sek>        - Check-Intervall in Sekunden setzen
 reset interval            - Check-Intervall auf Standard zuruecksetzen
 enable startcall          - Startup-Testanruf beim Start AN
 disable startcall         - Startup-Testanruf beim Start AUS
-hilfe / help              - Diese Hilfe anzeigen
+hilfe / help / /help      - Diese Hilfe anzeigen
 stop / quit / beenden     - Watcher beenden\
 """
 
@@ -1325,7 +1411,7 @@ def handle_command(body: str, state: WatcherState) -> str | None:
             persisted via ``save_state``.
 
     Returns:
-        A response string for the user, a sentinel (``"__status__"``,
+        A response string for the user, a sentinel (``"__status__"``, ``"__eta__"``,
         ``"__stop__"``, ``"__testcall__\\n<text>"``), or ``None`` if the
         message is not a recognised command.
     """
@@ -1339,12 +1425,16 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         return f"__testcall__\n{spoken}"
 
     # --- help ---
-    if text in ("hilfe", "help", "?"):
+    if text in ("hilfe", "help", "?", "/hilfe", "/help"):
         return HELP_TEXT
 
     # --- status ---
     if text == "status":
         return "__status__"
+
+    # --- eta (remaining time / forecasts only) ---
+    if text in ("eta", "restzeit", "prognose"):
+        return "__eta__"
 
     # --- enable/disable tempdown ---
     if text in ("enable tempdown", "tempalert tempdown enable", "tempdown an", "tempdown on"):
@@ -1504,31 +1594,37 @@ def handle_command(body: str, state: WatcherState) -> str | None:
             f"den Hoechstwert neu — TempDown-Alert misst ab dann von vorne."
         )
 
+    # --- wrapped at HH:MM (backdate the wrap, no pause) ---
+    m = re.match(r"(?:wrapped|gewrappt)\s+(?:at|um)\s+(\d{1,2}):(\d{2})$", text)
+    if m:
+        hour, minute = int(m.group(1)), int(m.group(2))
+        if hour > 23 or minute > 59:
+            return "Fehler: Uhrzeit als HH:MM angeben, z.B. 'wrapped at 11:15'."
+        now = _now()
+        reply = _mark_wrapped(state, _last_clock_time(hour, minute, now))
+        save_state(state)
+        return reply
+
     # --- pause / wrapped / resume (lid open, wrapping) ---
     m = re.match(r"(pause|pausieren|deckel|wrapped|gewrappt)(?:\s+(\d+))?$", text)
     if m:
-        minutes = int(m.group(2)) if m.group(2) else PAUSE_DEFAULT_MINUTES
-        if minutes <= 0:
-            return "Fehler: Pause muss mindestens 1 Minute dauern."
-        state.pause_until = _now() + minutes * 60
-        reply = (
-            f"Pause fuer {minutes} Min.: TempDown, Stall und Ambient-Bereich sind stumm. "
-            f"Danach wird Max-Ambient automatisch zurueckgesetzt. Pull-, Offline- und "
-            f"Cook-Ende-Alarm bleiben aktiv. Vorzeitig beenden mit 'resume'."
-        )
-        if m.group(1) in ("wrapped", "gewrappt"):
-            now = _now()
-            state.wrap_alerted = True
-            state.wrapped_at = now
-            _clear_pending_call(state, "wrap")
-            reply += (
-                f"\nWrap als erledigt markiert. Endphasen-Prognose sucht ab "
-                f"{_clock(now + ENDPHASE_SETTLE_MINUTES * 60, now)} den Beginn der gleichmaessigen Endphase "
-                f"(Pit {effective_pit_temp(state):g} C; aendern mit 'set pit <C>'), Prognose fruehestens "
-                f"nach {ENDPHASE_MIN_MINUTES} Min. Daten."
+        is_wrapped = m.group(1) in ("wrapped", "gewrappt")
+        reply_parts: list[str] = []
+        # ``wrapped`` alone only sets the status; a pause needs explicit minutes.
+        if not is_wrapped or m.group(2):
+            minutes = int(m.group(2)) if m.group(2) else PAUSE_DEFAULT_MINUTES
+            if minutes <= 0:
+                return "Fehler: Pause muss mindestens 1 Minute dauern."
+            state.pause_until = _now() + minutes * 60
+            reply_parts.append(
+                f"Pause fuer {minutes} Min.: TempDown, Stall und Ambient-Bereich sind stumm. "
+                f"Danach wird Max-Ambient automatisch zurueckgesetzt. Pull-, Offline- und "
+                f"Cook-Ende-Alarm bleiben aktiv. Vorzeitig beenden mit 'resume'."
             )
+        if is_wrapped:
+            reply_parts.append(_mark_wrapped(state, _now()))
         save_state(state)
-        return reply
+        return "\n".join(reply_parts)
 
     if text in ("resume", "weiter", "pause aus", "pause off", "pause beenden"):
         if state.pause_until is None:
@@ -1824,8 +1920,10 @@ async def event_loop(
             stop_event.set()
             return
 
-        if response == "__status__":
-            check_result = await asyncio.to_thread(run_meater_check, state, _send_via_messaging)
+        if response in ("__status__", "__eta__"):
+            check_result = await asyncio.to_thread(
+                run_meater_check, state, _send_via_messaging, eta_only=response == "__eta__"
+            )
             if check_result == "__cook_ended__":
                 await messaging.send_message(
                     incoming_room_id,

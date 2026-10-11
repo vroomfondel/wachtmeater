@@ -106,6 +106,17 @@ class TestCommandParsing:
     def test_resume_listed_in_help(self, state: OperatorState) -> None:
         assert "operator resume" in op.HELP_TEXT
 
+    def test_restart_returns_sentinel(self, state: OperatorState) -> None:
+        result = op.handle_operator_command("operator restart abc-123", PITMASTER, state)
+        assert result == "__op_restart__\nabc-123"
+
+    def test_restart_case_insensitive_keyword(self, state: OperatorState) -> None:
+        result = op.handle_operator_command("OPERATOR RESTART 2", PITMASTER, state)
+        assert result == "__op_restart__\n2"
+
+    def test_restart_listed_in_help(self, state: OperatorState) -> None:
+        assert "operator restart" in op.HELP_TEXT
+
     def test_list_returns_sentinel(self, state: OperatorState) -> None:
         assert op.handle_operator_command("operator list", PITMASTER, state) == "__op_list__"
 

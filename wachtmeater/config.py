@@ -352,8 +352,8 @@ class MonitoringConfig(_EnvMixin):
             (``STALL_DISTURBANCE_CORE_DROP``).
         stall_disturbance_pause_checks: Checks to skip stall evaluation
             after a disturbance (``STALL_DISTURBANCE_PAUSE_CHECKS``).
-        pause_default_minutes: Default duration of the ``pause`` /
-            ``wrapped`` command (``PAUSE_DEFAULT_MINUTES``).
+        pause_default_minutes: Default duration of the ``pause`` command
+            (``PAUSE_DEFAULT_MINUTES``).
         forecast_window_minutes: Time window for the watcher's own linear
             ETA forecast to the pull target (``FORECAST_WINDOW_MINUTES``).
         tempdown_warmup_core_temp: Core temperature in C from which the

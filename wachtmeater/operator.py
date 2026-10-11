@@ -11,6 +11,9 @@ Recognised commands:
 * ``operator resume <spec>``        — recreate a watcher whose cook was
   (falsely) marked ended; *spec* is resolved like ``operator delete``.
   The revived watcher starts with cook-end detection switched off.
+* ``operator restart <spec>``       — recreate a watcher job (e.g. to pick
+  up a newly deployed image); the cook continues from its persisted state
+  with all settings unchanged.  *spec* is resolved like ``operator delete``.
 * ``operator delete <spec>``        — delete a watcher; *spec* may be a
   full MEATER URL, a cook UUID, the 8-char short suffix, or a 1-based
   list index from a recent ``operator list``.
@@ -56,6 +59,7 @@ Wachtmeater Operator Befehle:
 
 operator new <MEATER_URL>      - Neuen Watcher-Job starten
 operator resume <spec>         - Beendeten Watcher fortsetzen (URL, UUID, short, oder Listen-Index)
+operator restart <spec>        - Watcher neu starten, z.B. fuer neues Image (URL, UUID, short, oder Listen-Index)
 operator delete <spec>         - Watcher loeschen (URL, UUID, short, oder Listen-Index)
 operator list                  - Aktive Watcher auflisten
 operator status                - Operator-Health
@@ -159,7 +163,8 @@ def handle_operator_command(body: str, sender_mxid: str, state: OperatorState) -
 
     Returns:
         A response string for the user, a sentinel (``"__op_new__\\n<url>"``,
-        ``"__op_resume__\\n<spec>"``, ``"__op_delete__\\n<spec>"``,
+        ``"__op_resume__\\n<spec>"``, ``"__op_restart__\\n<spec>"``,
+        ``"__op_delete__\\n<spec>"``,
         ``"__op_list__"``, ``"__op_status__"``), or ``None`` if the message
         is not an operator command.
     """
@@ -192,6 +197,11 @@ def handle_operator_command(body: str, sender_mxid: str, state: OperatorState) -
     if m:
         spec = m.group(1)
         return f"__op_resume__\n{spec}"
+
+    m = re.match(r"^operator\s+restart\s+(\S+)\s*$", raw, re.IGNORECASE)
+    if m:
+        spec = m.group(1)
+        return f"__op_restart__\n{spec}"
 
     m = re.match(r"^operator\s+delete\s+(\S+)\s*$", raw, re.IGNORECASE)
     if m:
@@ -357,6 +367,26 @@ async def event_loop() -> None:
             except Exception as e:
                 logger.exception("create_resources (resume) fehlgeschlagen")
                 await messaging.send_message(operator_room, f"Fehler beim Fortsetzen: {e}")
+            return
+
+        if response.startswith("__op_restart__\n"):
+            spec = response.removeprefix("__op_restart__\n")
+            resolved = _resolve_delete_spec(spec, op_state)
+            if resolved is None:
+                await messaging.send_message(
+                    operator_room,
+                    f"Konnte '{spec}' nicht aufloesen (URL, UUID, short, oder Listen-Index nach 'operator list').",
+                )
+                return
+            await messaging.send_message(operator_room, f"Starte Watcher neu fuer {resolved} ...")
+            try:
+                # Plain recreate: the job is deleted and created again with the
+                # current image; the cook continues from its persisted state.
+                await asyncio.to_thread(create_resources, resolved)
+                await messaging.send_message(operator_room, f"Watcher neu gestartet: {resolved}")
+            except Exception as e:
+                logger.exception("create_resources (restart) fehlgeschlagen")
+                await messaging.send_message(operator_room, f"Fehler beim Neustart: {e}")
             return
 
         if response.startswith("__op_delete__\n"):

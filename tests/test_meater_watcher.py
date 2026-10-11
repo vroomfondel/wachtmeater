@@ -5,6 +5,7 @@ Requires minimatrix (imported at module level by meater_watcher).
 
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -156,6 +157,21 @@ class TestHandleCommand:
     @patch.object(mw, "save_state")
     def test_status(self, _save: MagicMock, base_state: WatcherState) -> None:
         assert mw.handle_command("status", base_state) == "__status__"
+
+    @patch.object(mw, "save_state")
+    def test_slash_help(self, _save: MagicMock, base_state: WatcherState) -> None:
+        assert mw.handle_command("/help", base_state) == mw.HELP_TEXT
+        assert mw.handle_command("/hilfe", base_state) == mw.HELP_TEXT
+
+    @patch.object(mw, "save_state")
+    def test_eta(self, _save: MagicMock, base_state: WatcherState) -> None:
+        assert mw.handle_command("eta", base_state) == "__eta__"
+        assert mw.handle_command("ETA", base_state) == "__eta__"
+        assert mw.handle_command("restzeit", base_state) == "__eta__"
+
+    def test_eta_listed_in_help(self) -> None:
+        assert "eta" in mw.HELP_TEXT
+        assert "/help" in mw.HELP_TEXT
 
     @patch.object(mw, "save_state")
     def test_testcall_default(self, _save: MagicMock, base_state: WatcherState) -> None:
@@ -458,6 +474,48 @@ class TestHandleCommand:
         assert base_state.wrap_alerted is True
         assert base_state.alert_calls_sent == []
         assert result is not None and "Wrap als erledigt" in result
+
+    @patch.object(mw, "save_state")
+    def test_wrapped_without_minutes_only_sets_status(self, _save: MagicMock, base_state: WatcherState) -> None:
+        with patch.object(mw, "_now", return_value=1000.0):
+            result = mw.handle_command("wrapped", base_state)
+        assert base_state.pause_until is None
+        assert base_state.wrap_alerted is True
+        assert base_state.wrapped_at == 1000.0
+        assert result is not None and "Pause" not in result
+
+    @patch.object(mw, "save_state")
+    def test_wrapped_at_backdates_without_pause(self, _save: MagicMock, base_state: WatcherState) -> None:
+        now = datetime(2026, 10, 11, 12, 21).timestamp()
+        base_state.alert_calls_sent = ["wrap"]
+        with patch.object(mw, "_now", return_value=now):
+            result = mw.handle_command("wrapped at 11:05", base_state)
+        assert base_state.wrapped_at == datetime(2026, 10, 11, 11, 5).timestamp()
+        assert base_state.wrap_alerted is True
+        assert base_state.alert_calls_sent == []
+        assert base_state.pause_until is None
+        assert result is not None and "(11:05)" in result and "ab 12:05" in result
+
+    @patch.object(mw, "save_state")
+    def test_wrapped_at_future_clock_means_yesterday(self, _save: MagicMock, base_state: WatcherState) -> None:
+        now = datetime(2026, 10, 11, 0, 30).timestamp()
+        with patch.object(mw, "_now", return_value=now):
+            mw.handle_command("gewrappt um 23:40", base_state)
+        assert base_state.wrapped_at == datetime(2026, 10, 10, 23, 40).timestamp()
+
+    @patch.object(mw, "save_state")
+    def test_wrapped_at_respects_later_disturbance(self, _save: MagicMock, base_state: WatcherState) -> None:
+        now = datetime(2026, 10, 11, 12, 50).timestamp()
+        base_state.trend_ignore_before = datetime(2026, 10, 11, 12, 41).timestamp()
+        with patch.object(mw, "_now", return_value=now):
+            result = mw.handle_command("wrapped at 11:05", base_state)
+        assert result is not None and "ab 12:41" in result
+
+    @patch.object(mw, "save_state")
+    def test_wrapped_at_invalid_clock_rejected(self, _save: MagicMock, base_state: WatcherState) -> None:
+        result = mw.handle_command("wrapped at 25:00", base_state)
+        assert result is not None and result.startswith("Fehler")
+        assert base_state.wrapped_at is None
 
     @patch.object(mw, "save_state")
     def test_resume_without_pause(self, _save: MagicMock, base_state: WatcherState) -> None:
@@ -767,6 +825,37 @@ class TestRunMeaterCheck:
         assert base_state.cook_ended is True
         mock_call.assert_called_once()
         mock_send.assert_called_once()
+
+    def test_eta_only_sends_compact_message_without_screenshot(self, base_state: WatcherState) -> None:
+        mock_send = MagicMock()
+        with (
+            patch.object(mw, "get_meater_data", return_value=self._make_data()),
+            patch.object(mw, "call_pitmaster"),
+            patch.object(mw, "save_state"),
+        ):
+            mw.run_meater_check(base_state, send=mock_send, eta_only=True)
+        mock_send.assert_called_once()
+        text, image = mock_send.call_args.args
+        assert image is None
+        assert text.startswith("MEATER ETA: Brisket")
+        assert "Remaining: 2h 30m" in text
+        assert "Target: 96.0 C" in text
+        # The full status block (URL, alert summary, elapsed) is left out.
+        assert "URL:" not in text
+        assert "Elapsed:" not in text
+
+    def test_full_status_still_sends_screenshot(self, base_state: WatcherState) -> None:
+        mock_send = MagicMock()
+        with (
+            patch.object(mw, "get_meater_data", return_value=self._make_data()),
+            patch.object(mw, "call_pitmaster"),
+            patch.object(mw, "save_state"),
+        ):
+            mw.run_meater_check(base_state, send=mock_send)
+        text, image = mock_send.call_args.args
+        assert image == "/tmp/test.png"
+        assert "Remaining: 2h 30m" in text
+        assert "Elapsed: 4h" in text
 
     def test_transient_error_never_ends_cook(self, base_state: WatcherState) -> None:
         # A CDP/timeout (our-side) error must NOT be mistaken for cook-end,
