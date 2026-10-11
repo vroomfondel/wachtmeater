@@ -77,6 +77,8 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
 warn_unreachable = true
+# kubernetes>=37 ships py.typed, but its config loaders are still unannotated
+untyped_calls_exclude = ["kubernetes.config"]
 # plugins = ["pydantic.mypy"]
 exclude = '''(?x)(
     \.venv

@@ -92,9 +92,10 @@ def _list_watcher_jobs() -> list[tuple[str, str, str]]:
     resp = batch_v1.list_namespaced_job(NAMESPACE, label_selector=None)
     rows: list[tuple[str, str, str]] = []
     for job in resp.items:
-        if not job.metadata.name.startswith("meater-watcher-"):
+        meta = job.metadata
+        if meta is None or not meta.name or not meta.name.startswith("meater-watcher-"):
             continue
-        annotations = job.metadata.annotations or {}
+        annotations = meta.annotations or {}
         url = annotations.get("wachtmeater/meater-url", "<unknown>")
         st = job.status
         if st and st.active:
@@ -105,7 +106,7 @@ def _list_watcher_jobs() -> list[tuple[str, str, str]]:
             status = "Failed"
         else:
             status = "Pending"
-        rows.append((job.metadata.name, url, status))
+        rows.append((meta.name, url, status))
     rows.sort(key=lambda r: r[0])
     return rows
 
