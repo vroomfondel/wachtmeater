@@ -52,6 +52,11 @@ ENDPHASE_MIN_MINUTES: int = cfg.monitoring.endphase_min_minutes
 ENDPHASE_MAX_POINTS: int = 120
 """Samples are thinned to this many for the end-phase fit (bounds the cost per check)."""
 
+# Rest-phase forecast (exponential cooling fit from ``enable ruhephase`` on)
+ROOM_TEMP: float = cfg.monitoring.room_temp
+RESTPHASE_MIN_MINUTES: int = 30
+"""Minimum span of falling core readings before the first rest-phase forecast."""
+
 # Cook-end detection: consecutive errors before declaring cook ended
 COOKEND_ERROR_THRESHOLD: int = cfg.monitoring.cookend_error_threshold
 # Internal temp below this after having been above 50 C => probe removed

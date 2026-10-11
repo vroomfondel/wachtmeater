@@ -120,9 +120,20 @@ Als Ziel gilt der Pull-Override (`enable pull`), sonst das MEATER-Ziel.
 | Schlüssel                      | Env                            | Default | Bedeutung                                               |
 |--------------------------------|--------------------------------|---------|---------------------------------------------------------|
 | `pit_temp`                     | `PIT_TEMP`                     | `110.0` | $A$ der Endphasen-Prognose (echte Smokertemperatur)     |
+| `room_temp`                    | `ROOM_TEMP`                    | `22.0`  | $A$ der Ruhephasen-Prognose (Umgebungstemperatur)       |
 | `endphase_settle_minutes`      | `ENDPHASE_SETTLE_MINUTES`      | `60`    | Fester Fit-Start nach `wrapped`                         |
 | `endphase_min_minutes`         | `ENDPHASE_MIN_MINUTES`         | `60`    | Mindest-Datenspanne vor der ersten Prognose             |
 | `forecast_window_minutes`      | `FORECAST_WINDOW_MINUTES`      | `60`    | Fenster der linearen Watcher-Prognose                   |
+
+### Ruhephasen-Prognose
+
+Nach dem Pull kühlt der Kern nach demselben Newton-Gesetz ab, nur mit $A$ unterhalb des Kerns: $A$ ist die Umgebungstemperatur `room_temp` (Default 22 °C), und die Formel für die Restzeit bleibt $\Delta t = \ln\frac{A - T_{jetzt}}{A - T_Z} / c$. Nach `enable ruhephase <temp>` ersetzt die Ruhephasen-Prognose die Prognosen zum Pull-Ziel:
+
+```
+Ruhephasen-Prognose bis 65.0 C (A=Umgebung 22 C, Fit 14:10-15:40, 10 Punkte, RMS 0.05 C): ~18:25
+```
+
+Der Fit beginnt am Kern-Maximum nach `enable ruhephase` (der Nachzieh-Anstieg direkt nach dem Pull ist noch keine Abkühlung) und braucht mindestens 30 Min. fallende Messwerte. In einer isolierten Box (Kühlbox, Tücher) ist die effektive Umgebung wärmer als der Raum; mit $A$ = Raumtemperatur ist die Prognose dann eher zu früh.
 
 ## 6. Sondernutzung: Auswertung eines Element-Chat-Exports
 
@@ -160,6 +171,7 @@ A frei (≤Pit): A=102.3±4.5 °C c=0.135/h -> 16:07
 | `A=… : c=…/h rms=… -> 14:59`            | Exponentieller Fit mit festem $A$: Ratenkonstante $c$, RMS der Abweichungen in °C, ETA als Uhrzeit |
 | `<- A = Pit (schnellste Exp.-Variante)` | markiert die Variante mit $A$ = Pit                                                                |
 | `A frei (≤Pit): A=102.3±4.5 °C`        | freier Fit, $A$ durch die Smokertemperatur begrenzt, mit Standardfehler                            |
+| `… an der Untergrenze … nicht bestimmbar` | freies $A$ hängt knapp über dem Ziel fest (Endphase noch nicht stetig oder Ausreißer); statt einer unsinnig späten Uhrzeit keine ETA |
 | `nie (A <= Ziel)`                       | $A$ liegt nicht über dem Ziel, die Kurve erreicht es nie                                           |
 | `nicht absehbar (…)`                    | ETA mehr als 24 Stunden in der Zukunft, der Kern steigt kaum                                       |
 

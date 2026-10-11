@@ -287,6 +287,7 @@ class TestHandleCommand:
         result = commands.handle_command("enable ruhephase 55", base_state)
         assert base_state.tempalert_ruhephase_enabled is True
         assert base_state.ruhephase_target_temp == 55.0
+        assert base_state.ruhephase_started_at is not None
         assert result is not None
 
     @patch.object(watcher_state, "save_state")
@@ -1439,6 +1440,64 @@ class TestRunMeaterCheck:
         assert abs((eta - ref).total_seconds()) <= 5 * 60
         assert lines[1].startswith(f"  Letzter Messwert {curve[-1]:.1f} C weicht von der Kurve")
         assert "ab Messwert: ~" in lines[1]
+
+    def _rest_state(self, base_state: WatcherState, start: float, n: int) -> list[float]:
+        # Pull at *start*, 20 min carry-over rise, then Newton cooling to 22 C
+        base_state.tempalert_ruhephase_enabled = True
+        base_state.ruhephase_target_temp = 65.0
+        base_state.ruhephase_started_at = start
+        peak = start + 1200
+        curve = [22.0 + 72.0 * math.exp(-0.2 * i / 6) for i in range(n)]
+        base_state.internal_samples = [
+            [start - 600, 95.0],  # before 'enable ruhephase': ignored
+            [start, 93.0],
+            [start + 600, 93.6],
+            *[[peak + i * 600, k] for i, k in enumerate(curve)],
+        ]
+        return curve
+
+    def test_restphase_collecting(self, base_state: WatcherState) -> None:
+        start = 1_000_000.0
+        curve = self._rest_state(base_state, start, 3)
+        now = start + 1200 + 1200
+        lines = status_text.restphase_lines(base_state, now, curve[-1])
+        assert len(lines) == 1 and "sammelt Daten" in lines[0] and "94.0 C" in lines[0]
+
+    def test_restphase_forecast_from_peak(self, base_state: WatcherState) -> None:
+        start = 1_000_000.0
+        curve = self._rest_state(base_state, start, 13)
+        peak = start + 1200
+        now = peak + 12 * 600
+        with patch.object(status_text, "ROOM_TEMP", 22.0):
+            lines = status_text.restphase_lines(base_state, now, curve[-1])
+        expected = now + math.log((curve[-1] - 22.0) / (65.0 - 22.0)) / 0.2 * 3600
+        assert len(lines) == 1
+        assert f"A=Umgebung 22 C, Fit {timeutil.clock(peak, now)}-" in lines[0]
+        assert lines[0].endswith(f"~{timeutil.clock(expected, now)}")
+
+    def test_restphase_replaces_pull_forecasts(self, base_state: WatcherState) -> None:
+        start = 1_000_000.0
+        curve = self._rest_state(base_state, start, 13)
+        base_state.wrapped_at = start - 6 * 3600
+        now = start + 1200 + 12 * 600
+        lines = status_text.eta_lines(base_state, now, {}, curve[-1], 96.0)
+        assert lines[1].startswith("Ruhephasen-Prognose")
+        assert not any("Endphasen" in l or "Watcher-Prognose" in l for l in lines)
+
+    def test_restphase_off_or_reached(self, base_state: WatcherState) -> None:
+        start = 1_000_000.0
+        curve = self._rest_state(base_state, start, 13)
+        now = start + 1200 + 12 * 600
+        assert status_text.restphase_lines(base_state, now, 64.0) == []
+        base_state.tempalert_ruhephase_enabled = False
+        assert status_text.restphase_lines(base_state, now, curve[-1]) == []
+
+    def test_restphase_config_default_needs_falling_core(self, base_state: WatcherState) -> None:
+        # Enabled by config default (no 'enable ruhephase' time): silent while heating
+        base_state.tempalert_ruhephase_enabled = True
+        base_state.ruhephase_target_temp = 65.0
+        base_state.internal_samples = [[1_000_000.0 + i * 600, 70.0 + i] for i in range(6)]
+        assert status_text.restphase_lines(base_state, 1_003_000.0, 75.0) == []
 
     def test_resets_consecutive_errors_on_success(self, base_state: WatcherState) -> None:
         base_state.consecutive_errors = 2

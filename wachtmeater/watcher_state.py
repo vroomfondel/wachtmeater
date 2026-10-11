@@ -41,6 +41,8 @@ class WatcherState:
     tempalert_tempdown_enabled: bool = True
     tempalert_ruhephase_enabled: bool = False
     ruhephase_target_temp: float | None = None
+    # Epoch of ``enable ruhephase`` — anchors the rest-phase forecast fit
+    ruhephase_started_at: float | None = None
     tempalert_stall_enabled: bool = False
     stall_max_rate: float = 4.0
     stall_alerted: bool = False

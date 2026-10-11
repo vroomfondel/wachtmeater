@@ -279,22 +279,28 @@ def _model(t: FloatArray, ambient: float, core0: float, c: float) -> FloatArray:
     return ambient - (ambient - core0) * np.exp(-c * t)
 
 
-def eta_hours(ambient: float, c: float, core_now: float, target: float) -> float | None:
+def eta_hours(ambient: float, c: float, core_now: float, target: float, cooling: bool = False) -> float | None:
     """Remaining hours until the exponential model reaches *target*.
+
+    The same formula serves heating (end phase, ``A`` above the core) and
+    cooling (rest phase, ``A`` = room temperature below the core): both
+    differences then have the same sign.
 
     Args:
         ambient: Effective surface temperature ``A``.
         c: Rate constant in 1/h.
         core_now: Current core temperature.
         target: Target core temperature.
+        cooling: ``True`` for the rest phase (core falls towards ``A``).
 
     Returns:
         ``ln((A - T_now) / (A - T_Z)) / c``; ``0.0`` if the target is already
-        reached; ``None`` if ``A`` does not exceed the target (never arrives).
+        reached; ``None`` if ``A`` does not lie beyond the target (never
+        arrives).
     """
-    if core_now >= target:
+    if (core_now <= target) if cooling else (core_now >= target):
         return 0.0
-    if ambient <= target or c <= 0:
+    if c <= 0 or ((ambient >= target) if cooling else (ambient <= target)):
         return None
     return math.log((ambient - core_now) / (ambient - target)) / c
 
@@ -325,14 +331,17 @@ def _c_guess(t: FloatArray, core: FloatArray, ambient: float, bounds: tuple[floa
     """Start value for ``c`` from the first and last reading.
 
     Solves the model through both end points; falls back to 0.1 /h when the
-    data do not allow it (flat or falling core, a reading at or above ``A``).
+    data do not allow it (core not approaching ``A``, a reading at or beyond
+    ``A``).  Works for heating and cooling alike.
     The result is clipped strictly inside *bounds*, as ``least_squares``
     requires.
     """
     lo, hi = bounds
     c = 0.1
-    if t[-1] > 0 and core[-1] > core[0] and ambient > core[-1]:
-        c = math.log((ambient - core[0]) / (ambient - core[-1])) / float(t[-1])
+    if t[-1] > 0 and ambient != core[-1]:
+        ratio = (ambient - core[0]) / (ambient - core[-1])
+        if ratio > 1:
+            c = math.log(ratio) / float(t[-1])
     return min(max(c, lo * 1.01), hi * 0.99)
 
 
@@ -390,6 +399,7 @@ def _exp_fit(
     target: float,
     ambient_stderr: float | None = None,
     fixed: bool = True,
+    cooling: bool = False,
 ) -> ExpFit:
     """Build an ``ExpFit`` from a solved fit.
 
@@ -406,6 +416,7 @@ def _exp_fit(
         target: Target core temperature.
         ambient_stderr: Standard error of ``A`` (free fit only).
         fixed: ``True`` when ``A`` was given.
+        cooling: ``True`` for the rest phase (see ``eta_hours``).
 
     Returns:
         The fit.
@@ -418,10 +429,10 @@ def _exp_fit(
         ambient=ambient,
         c=c,
         rms=math.sqrt(float(np.mean(residuals**2))),
-        eta_hours=eta_hours(ambient, c, model_now if deviates else measured, target),
+        eta_hours=eta_hours(ambient, c, model_now if deviates else measured, target, cooling),
         core_model=model_now,
         core_measured=measured,
-        eta_hours_measured=eta_hours(ambient, c, measured, target),
+        eta_hours_measured=eta_hours(ambient, c, measured, target, cooling),
         last_deviates=deviates,
         ambient_stderr=ambient_stderr,
         fixed=fixed,
@@ -429,9 +440,17 @@ def _exp_fit(
 
 
 def fit_fixed_ambient(
-    t_h: Sequence[float], core: Sequence[float], ambient: float, target: float, loss: Loss = FIT_LOSS
+    t_h: Sequence[float],
+    core: Sequence[float],
+    ambient: float,
+    target: float,
+    loss: Loss = FIT_LOSS,
+    cooling: bool = False,
 ) -> ExpFit:
     """Fit ``T0`` and ``c`` with ``A`` held fixed.
+
+    Also fits the rest phase (``cooling=True``): Newton's law of cooling is
+    the same curve with ``A`` (room temperature) below the core.
 
     Args:
         t_h: Hours since the first reading.
@@ -439,6 +458,7 @@ def fit_fixed_ambient(
         ambient: Fixed effective surface temperature ``A``.
         target: Target core temperature.
         loss: ``"huber"`` (robust, default) or ``"linear"``.
+        cooling: ``True`` for the rest phase (core falls towards ``A``).
 
     Returns:
         The fit with RMS and ETA from the last reading.
@@ -452,7 +472,7 @@ def fit_fixed_ambient(
 
     x0 = [float(k[0]), _c_guess(t, k, ambient, _C_BOUNDS_FIXED)]
     res = _solve(_res, [x0], [-np.inf, _C_BOUNDS_FIXED[0]], [np.inf, _C_BOUNDS_FIXED[1]], loss)
-    return _exp_fit(ambient, float(res.x[1]), _res(res.x), core, target)
+    return _exp_fit(ambient, float(res.x[1]), _res(res.x), core, target, cooling=cooling)
 
 
 def fit_free_ambient(
@@ -594,7 +614,28 @@ def is_stable(
         return False
     if free.ambient_stderr is None or free.ambient_stderr > stderr_max:
         return False
-    return free.ambient - (fc.target + _FREE_A_MARGIN) >= max(bound_eps, free.ambient_stderr)
+    return not at_lower_bound(free, fc.target, bound_eps)
+
+
+def at_lower_bound(fit: ExpFit, target: float, bound_eps: float = DEFAULT_BOUND_EPS) -> bool:
+    """Tell whether a free fit's ``A`` is pinned to its lower bound (just above the target).
+
+    Pinned means less than ``max(bound_eps, stderr)`` above the bound, i.e.
+    not clearly more than its own uncertainty.  The optimum then wanted an
+    even lower ``A``: the window is not in the steady end phase yet, or an
+    outlier (often in the newest reading, which carries the most weight for
+    ``A``) bends the curve.  Its ETA — far in the future, from an ``A``
+    barely above the target — is an artefact of the bound, not a forecast.
+
+    Args:
+        fit: The free fit.
+        target: Target core temperature.
+        bound_eps: Minimum distance in C above the lower bound.
+
+    Returns:
+        ``True`` if ``A`` is pinned to the lower bound.
+    """
+    return fit.ambient - (target + _FREE_A_MARGIN) < max(bound_eps, fit.ambient_stderr or 0.0)
 
 
 def find_endphase_start(
@@ -799,13 +840,19 @@ def format_report(fc: Forecast) -> str:
         lines.append(f"A={f.ambient:5.1f} °C : c={f.c:.3f}/h rms={f.rms:.3f} -> {_hm(f.eta_hours)}{tag}{_measured(f)}")
     if fc.free is not None:
         err = f"±{fc.free.ambient_stderr:.1f}" if fc.free.ambient_stderr is not None else ""
-        lines.append(
-            f"A frei (≤Pit): A={fc.free.ambient:.1f}{err} °C c={fc.free.c:.3f}/h -> {_hm(fc.free.eta_hours)}"
-            f"{_measured(fc.free)}"
-        )
+        if at_lower_bound(fc.free, fc.target):
+            lines.append(
+                f"A frei (≤Pit): A={fc.free.ambient:.1f}{err} °C an der Untergrenze (Ziel + {_FREE_A_MARGIN:g}) "
+                f"-> nicht bestimmbar (Endphase noch nicht stetig oder Ausreißer)"
+            )
+        else:
+            lines.append(
+                f"A frei (≤Pit): A={fc.free.ambient:.1f}{err} °C c={fc.free.c:.3f}/h -> {_hm(fc.free.eta_hours)}"
+                f"{_measured(fc.free)}"
+            )
     else:
         lines.append("A frei (≤Pit): nicht bestimmbar")
-    deviating = next((f for f in [*fc.fixed, fc.free] if f is not None and f.last_deviates), None)
+    deviating = next((f for f in fc.fixed if f.last_deviates), None)
     if deviating is not None:
         lines.append(
             f"Hinweis: letzter Messwert {deviating.core_measured:.1f} °C weicht von der Kurve "

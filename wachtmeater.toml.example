@@ -35,6 +35,7 @@ stall_disturbance_pause_checks = 2
 pause_default_minutes       = 20      # Standarddauer fuer 'pause' / 'wrapped'
 forecast_window_minutes     = 60      # Fenster fuer die eigene Restzeit-Prognose
 pit_temp                    = 110.0   # echte Smokertemperatur = A der Endphasen-Prognose
+room_temp                   = 22.0    # Umgebungstemperatur beim Ruhen = A der Ruhephasen-Prognose
 tempdown_warmup_core_temp   = 40.0    # Max-Ambient fuer TempDown erst ab dieser Kerntemp (Anheiz-Spitzen ignorieren; 0 = sofort)
 endphase_settle_minutes     = 60      # Fit-Start nach 'wrapped' (fest)
 endphase_min_minutes        = 60      # Mindest-Datenspanne fuer die Endphasen-Prognose

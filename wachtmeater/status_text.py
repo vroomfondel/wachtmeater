@@ -1,7 +1,8 @@
 """Text blocks of the status message: remaining-time lines and alert summary.
 
 ``eta_lines`` combines the MEATER estimate, the watcher's linear trend
-forecast and the end-phase forecast (``wachtmeater.core_forecast``);
+forecast and the end-phase forecast (``wachtmeater.core_forecast``) — or,
+during the rest phase, the cooling forecast to the rest target;
 ``alert_summary`` lists the alert settings and their state.
 """
 
@@ -17,6 +18,8 @@ from wachtmeater.watcher_settings import (
     ENDPHASE_MIN_MINUTES,
     ENDPHASE_SETTLE_MINUTES,
     FORECAST_WINDOW_MINUTES,
+    RESTPHASE_MIN_MINUTES,
+    ROOM_TEMP,
     STALL_CORE_MAX,
     STALL_CORE_MIN,
     STALL_WINDOW_MINUTES,
@@ -122,6 +125,74 @@ def endphase_lines(state: WatcherState, now: float, current_internal: float | No
     return lines
 
 
+def restphase_lines(state: WatcherState, now: float, current_internal: float | None) -> list[str]:
+    """Build the rest-phase forecast line (exponential cooling fit).
+
+    Newton's law of cooling towards ``A`` = ``ROOM_TEMP`` over the readings
+    from the core peak after ``enable ruhephase`` on (the carry-over rise
+    right after the pull is skipped); ``T0`` and ``c`` are fitted, as in the
+    end phase.  Without an ``enable ruhephase`` time (alert enabled by
+    config default) the rest phase only counts as started once the core has
+    fallen at least 1 C below its peak.
+
+    Args:
+        state: Watcher state holding the samples.
+        now: Current epoch seconds.
+        current_internal: Current core temperature.
+
+    Returns:
+        Status lines; empty when the rest-phase alert is off, has no target,
+        the rest phase has not started or the target is reached.
+    """
+    target = state.ruhephase_target_temp
+    if not state.tempalert_ruhephase_enabled or target is None or current_internal is None:
+        return []
+    if current_internal <= target:
+        return []
+    anchor = state.ruhephase_started_at
+    samples = [p for p in state.internal_samples if anchor is None or p[0] >= anchor]
+    if not samples:
+        return [] if anchor is None else [f"Ruhephasen-Prognose bis {target:.1f} C: sammelt Daten"]
+    peak = max(p[1] for p in samples)
+    if anchor is None and peak - current_internal < 1.0:
+        return []
+    # From the last reading at the peak on: the carry-over rise is not cooling.
+    peak_idx = max(i for i, p in enumerate(samples) if p[1] == peak)
+    readings: list[Reading] = [(p[0], p[1], None) for p in samples[peak_idx:]]
+    min_span = RESTPHASE_MIN_MINUTES * 60
+    if len(readings) < 3 or readings[-1][0] - readings[0][0] < min_span:
+        return [
+            f"Ruhephasen-Prognose bis {target:.1f} C: sammelt Daten (Fit ab Kern-Maximum {peak:.1f} C um "
+            f"{clock(readings[0][0], now)}, erste Prognose fruehestens ~{clock(readings[0][0] + min_span, now)})"
+        ]
+    window = thin(readings, ENDPHASE_MAX_POINTS)
+    t0, t_last = window[0][0], window[-1][0]
+    fit = fit_fixed_ambient(
+        [(r[0] - t0) / 3600 for r in window], [r[1] for r in window], ROOM_TEMP, target, cooling=True
+    )
+    head = (
+        f"Ruhephasen-Prognose bis {target:.1f} C (A=Umgebung {ROOM_TEMP:g} C, Fit {clock(t0, now)}-"
+        f"{clock(t_last, now)}, {len(window)} Punkte, RMS {fit.rms:.2f} C)"
+    )
+    if fit.eta_hours is None:
+        return [f"{head}: nie (Umgebung >= Ziel)"]
+    if fit.eta_hours > MAX_ETA_HOURS:
+        return [f"{head}: nicht absehbar (Kern faellt kaum)"]
+    lines = [f"{head}: ~{clock(t_last + fit.eta_hours * 3600, now)}"]
+    if fit.last_deviates:
+        measured = fit.eta_hours_measured
+        eta = (
+            f"~{clock(t_last + measured * 3600, now)}"
+            if measured is not None and measured <= MAX_ETA_HOURS
+            else "nicht absehbar"
+        )
+        lines.append(
+            f"  Letzter Messwert {fit.core_measured:.1f} C weicht von der Kurve ({fit.core_model:.1f} C) ab "
+            f"(Ausreisser?), Prognose ab Kurvenwert; ab Messwert: {eta}"
+        )
+    return lines
+
+
 def forecast_line(state: WatcherState, now: float, current_internal: float | None, target: float | None) -> str | None:
     """Build the watcher's own ETA forecast line to the pull target.
 
@@ -160,7 +231,9 @@ def eta_lines(
 ) -> list[str]:
     """Build all remaining-time lines: MEATER's estimate plus own forecasts.
 
-    Shared by the full status message and the compact ``eta`` reply.
+    Shared by the full status message and the compact ``eta`` reply.  During
+    the rest phase the cooling forecast replaces the forecasts to the pull
+    target, which make no sense on a falling core.
 
     Args:
         state: Current watcher state (samples, wrap time, pit temp).
@@ -170,14 +243,18 @@ def eta_lines(
         target: Effective pull target in C (override or MEATER target).
 
     Returns:
-        The ``Remaining:`` line, followed by the watcher's trend forecast and
-        the end-phase forecast block when available.
+        The ``Remaining:`` line, followed by the rest-phase forecast or the
+        watcher's trend forecast and the end-phase forecast block when
+        available.
     """
     remaining = data.get("remaining_time")
     if remaining_known(remaining, data.get("remaining_minutes")):
         lines = [f"Remaining: {remaining}"]
     else:
         lines = ["Remaining: unbekannt (MEATER liefert gerade keine Restzeit)"]
+    rest = restphase_lines(state, now, current_internal)
+    if rest:
+        return lines + rest
     forecast = forecast_line(state, now, current_internal, target)
     if forecast:
         lines.append(forecast)

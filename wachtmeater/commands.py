@@ -240,6 +240,7 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         target = float(m.group(1))
         state.tempalert_ruhephase_enabled = True
         state.ruhephase_target_temp = target
+        state.ruhephase_started_at = timeutil.now()
         clear_pending_call(state, "ruhephase")
         logger.info(f"Ruhephase-Alert aktiviert (Ziel-Abkuehltemperatur: {target} C).")
         reply = f"Ruhephase-Alert aktiviert. Ziel-Abkuehltemperatur: {target} C"

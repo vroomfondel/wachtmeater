@@ -122,9 +122,20 @@ The target is the pull override (`enable pull`), otherwise the MEATER target.
 | Key                            | Env                            | Default | Meaning                                               |
 |--------------------------------|--------------------------------|---------|-------------------------------------------------------|
 | `pit_temp`                     | `PIT_TEMP`                     | `110.0` | $A$ of the end-phase forecast (real smoker temperature) |
+| `room_temp`                    | `ROOM_TEMP`                    | `22.0`  | $A$ of the rest-phase forecast (ambient room temperature) |
 | `endphase_settle_minutes`      | `ENDPHASE_SETTLE_MINUTES`      | `60`    | Fixed fit start after `wrapped`                          |
 | `endphase_min_minutes`         | `ENDPHASE_MIN_MINUTES`         | `60`    | Minimum data span before the first forecast              |
 | `forecast_window_minutes`      | `FORECAST_WINDOW_MINUTES`      | `60`    | Window of the linear watcher forecast                 |
+
+### Rest-phase forecast
+
+After the pull the core cools by the same Newton law, only with $A$ below the core: $A$ is the room temperature `room_temp` (default 22 °C), and the remaining time is still $\Delta t = \ln\frac{A - T_{now}}{A - T_Z} / c$. After `enable ruhephase <temp>` the rest-phase forecast replaces the forecasts to the pull target:
+
+```
+Ruhephasen-Prognose bis 65.0 C (A=Umgebung 22 C, Fit 14:10-15:40, 10 Punkte, RMS 0.05 C): ~18:25
+```
+
+The fit starts at the core peak after `enable ruhephase` (the carry-over rise right after the pull is not cooling yet) and needs at least 30 min of falling readings. In an insulated box (cooler, towels) the effective surroundings are warmer than the room; with $A$ = room temperature the forecast then tends to be early.
 
 ## 6. Special use: analysing an Element chat export
 
@@ -163,6 +174,7 @@ A frei (≤Pit): A=102.3±4.5 °C c=0.135/h -> 16:07
 | `A=… : c=…/h rms=… -> 14:59`            | exponential fit with fixed $A$: rate constant $c$, RMS of the residuals in °C, ETA (wall-clock time of the last reading's day) |
 | `<- A = Pit (schnellste Exp.-Variante)` | marks the variant with $A$ = pit, the fastest exponential one                                                                  |
 | `A frei (≤Pit): A=102.3±4.5 °C`        | free fit, $A$ bounded by the pit temperature, with standard error                                                              |
+| `… an der Untergrenze … nicht bestimmbar` | free $A$ pinned just above the target (end phase not steady yet, or an outlier); no ETA instead of an absurdly late time |
 | `nie (A <= Ziel)`                       | never: $A$ does not exceed the target                                                                                          |
 | `nicht absehbar (…)`                    | not foreseeable: ETA more than 24 h ahead (core barely rising)                                                                 |
 

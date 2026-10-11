@@ -7,6 +7,7 @@ exact timestamps from the Element export).  Expected values are scipy
 got e.g. ``A=98.5±1.8``).
 """
 
+import math
 import json
 import zipfile
 from datetime import datetime
@@ -170,6 +171,21 @@ def test_eta_hours_edge_cases() -> None:
     assert cf.eta_hours(100.0, 0.162, 89.8, 96.5) == pytest.approx(6.6, abs=0.05)
 
 
+def test_eta_hours_cooling() -> None:
+    assert cf.eta_hours(22.0, 0.1, 64.0, 65.0, cooling=True) == 0.0  # already there
+    assert cf.eta_hours(70.0, 0.1, 90.0, 65.0, cooling=True) is None  # A above target: never
+    assert cf.eta_hours(22.0, 0.2, 90.0, 65.0, cooling=True) == pytest.approx(math.log(68 / 43) / 0.2)
+
+
+def test_fixed_fit_cooling_recovers_exact_curve() -> None:
+    # Newton cooling towards A=22: T0=92, c=0.15/h, 3 h of readings every 10 min
+    t_h = [i / 6 for i in range(19)]
+    core = [22.0 + 70.0 * math.exp(-0.15 * t) for t in t_h]
+    fit = cf.fit_fixed_ambient(t_h, core, 22.0, 65.0, cooling=True)
+    assert fit.c == pytest.approx(0.15, rel=1e-4)
+    assert fit.eta_hours == pytest.approx(math.log((core[-1] - 22.0) / 43.0) / 0.15, rel=1e-3)
+
+
 def test_free_fit_undetermined_with_pit_not_above_target() -> None:
     t_h = [(r[0] - READINGS[0][0]) / 3600 for r in READINGS]
     core = [r[1] for r in READINGS]
@@ -288,3 +304,18 @@ def test_cli_eta_parser() -> None:
 
 def test_report_time_is_local() -> None:
     assert datetime.fromtimestamp(READINGS[0][0]).strftime("%H:%M") == "08:01"
+
+
+def test_report_free_a_pinned_to_lower_bound_has_no_eta() -> None:
+    # A -1 C glitch in the newest reading drags the free A down to the target
+    # bound (96.6 C); its "ETA" (next morning) is an artefact of the bound.
+    bad = cf.forecast(_with_glitch(len(READINGS) - 1), target=96.5, pit=110.0)
+    assert bad.free is not None and cf.at_lower_bound(bad.free, bad.target)
+    line = next(l for l in cf.format_report(bad).splitlines() if l.startswith("A frei"))
+    assert "an der Untergrenze (Ziel + 0.1) -> nicht bestimmbar" in line
+    assert "->" in line and ":" not in line.split("->", 1)[1]
+
+
+def test_report_free_a_clear_of_bound_keeps_eta(fc_robust: cf.Forecast) -> None:
+    assert fc_robust.free is not None and not cf.at_lower_bound(fc_robust.free, fc_robust.target)
+    assert "A frei (≤Pit): A=102.3±4.5 °C c=0.135/h -> 16:07" in cf.format_report(fc_robust)

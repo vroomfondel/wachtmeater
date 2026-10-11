@@ -62,6 +62,7 @@ Environment variable reference
     ``PAUSE_DEFAULT_MINUTES`` (``20``),
     ``FORECAST_WINDOW_MINUTES`` (``60``),
     ``PIT_TEMP`` (``110.0``),
+    ``ROOM_TEMP`` (``22.0``),
     ``TEMPDOWN_WARMUP_CORE_TEMP`` (``40.0``),
     ``ENDPHASE_SETTLE_MINUTES`` (``60``),
     ``ENDPHASE_MIN_MINUTES`` (``60``),
@@ -368,6 +369,9 @@ class MonitoringConfig(_EnvMixin):
         pit_temp: Real smoker temperature in C — upper bound for the
             effective surface temperature ``A`` of the end-phase forecast;
             overridable per cook via ``set pit`` (``PIT_TEMP``).
+        room_temp: Ambient (room) temperature in C where the meat rests —
+            ``A`` of the rest-phase forecast, the temperature the core cools
+            towards (``ROOM_TEMP``).
         endphase_settle_minutes: Fixed fit start in minutes after
             ``wrapped`` (``ENDPHASE_SETTLE_MINUTES``).
         endphase_min_minutes: Minimum span of end-phase data after a fit
@@ -400,6 +404,7 @@ class MonitoringConfig(_EnvMixin):
     pause_default_minutes: int = env("PAUSE_DEFAULT_MINUTES", default=20)
     forecast_window_minutes: int = env("FORECAST_WINDOW_MINUTES", default=60)
     pit_temp: float = env("PIT_TEMP", default=110.0)
+    room_temp: float = env("ROOM_TEMP", default=22.0)
     tempdown_warmup_core_temp: float = env("TEMPDOWN_WARMUP_CORE_TEMP", default=40.0)
     endphase_settle_minutes: int = env("ENDPHASE_SETTLE_MINUTES", default=60)
     endphase_min_minutes: int = env("ENDPHASE_MIN_MINUTES", default=60)
