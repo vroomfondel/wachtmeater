@@ -3,6 +3,7 @@
 Requires minimatrix (imported at module level by meater_watcher).
 """
 
+import math
 import asyncio
 import json
 from datetime import datetime
@@ -504,12 +505,36 @@ class TestHandleCommand:
         assert base_state.wrapped_at == datetime(2026, 10, 10, 23, 40).timestamp()
 
     @patch.object(mw, "save_state")
-    def test_wrapped_at_respects_later_disturbance(self, _save: MagicMock, base_state: WatcherState) -> None:
+    def test_wrapped_at_endphase_ignores_later_disturbance(self, _save: MagicMock, base_state: WatcherState) -> None:
         now = datetime(2026, 10, 11, 12, 50).timestamp()
         base_state.trend_ignore_before = datetime(2026, 10, 11, 12, 41).timestamp()
         with patch.object(mw, "_now", return_value=now):
             result = mw.handle_command("wrapped at 11:05", base_state)
-        assert result is not None and "ab 12:41" in result
+        assert result is not None and "ab 12:05" in result
+        assert base_state.trend_ignore_before == datetime(2026, 10, 11, 12, 41).timestamp()
+
+    @patch.object(mw, "save_state")
+    def test_wrapped_at_replaces_previous_wrap_guard(self, _save: MagicMock, base_state: WatcherState) -> None:
+        now = datetime(2026, 10, 11, 12, 44).timestamp()
+        base_state.wrapped_at = datetime(2026, 10, 11, 12, 21).timestamp()
+        base_state.trend_ignore_before = datetime(2026, 10, 11, 12, 22).timestamp()
+        with patch.object(mw, "_now", return_value=now):
+            result = mw.handle_command("wrapped at 05:30", base_state)
+        state = base_state.to_dict()  # fresh read; mypy keeps the narrowed attribute
+        assert state["trend_ignore_before"] is None
+        assert state["wrapped_at"] == datetime(2026, 10, 11, 5, 30).timestamp()
+        assert result is not None and "ab 06:30" in result and "von 12:22 verworfen" in result
+
+    @patch.object(mw, "save_state")
+    def test_wrapped_at_keeps_guard_before_previous_wrap(self, _save: MagicMock, base_state: WatcherState) -> None:
+        now = datetime(2026, 10, 11, 12, 44).timestamp()
+        guard = datetime(2026, 10, 11, 10, 0).timestamp()
+        base_state.wrapped_at = datetime(2026, 10, 11, 12, 21).timestamp()
+        base_state.trend_ignore_before = guard
+        with patch.object(mw, "_now", return_value=now):
+            result = mw.handle_command("wrapped at 05:30", base_state)
+        assert base_state.trend_ignore_before == guard
+        assert result is not None and "ab 06:30" in result and "verworfen" not in result
 
     @patch.object(mw, "save_state")
     def test_wrapped_at_invalid_clock_rejected(self, _save: MagicMock, base_state: WatcherState) -> None:
@@ -1367,10 +1392,28 @@ class TestRunMeaterCheck:
         # 02.05.: core stood at 93 C for an hour -> ETA years ahead before the fix
         t0 = 1_000_000.0
         base_state.wrapped_at = t0 - 3 * 3600
-        base_state.internal_samples = [[t0 - 2 * 3600 + i * 600, 92.0 if i < 6 else 93.0] for i in range(13)]
+        base_state.internal_samples = [[t0 - 2 * 3600 + i * 600, 93.0] for i in range(13)]
         lines = mw._endphase_lines(base_state, t0, 93.0, 94.0)
-        assert lines[0].startswith("Endphasen-Prognose: noch kein stabiler Fit")
-        assert all("nicht absehbar" in l for l in lines[1:])
+        assert len(lines) == 1 and lines[0].endswith("nicht absehbar (Kern steigt kaum)")
+
+    def test_endphase_uses_pit_and_fixed_start(self, base_state: WatcherState) -> None:
+        t0 = 1_000_000.0
+        base_state.wrapped_at = t0 - 4 * 3600
+        base_state.pit_temp = 105.0
+        # Exact Newton curve from wrap+60: A=105, c=0.1/h, T0=80
+        start = base_state.wrapped_at + 3600
+        base_state.internal_samples = [
+            [start - 1800, 70.0],
+            *[[start + i * 600, 105.0 - 25.0 * math.exp(-0.1 * i / 6)] for i in range(19)],
+        ]
+        now = start + 18 * 600
+        core = base_state.internal_samples[-1][1]
+        lines = mw._endphase_lines(base_state, now, core, 96.0)
+        expected = now + math.log((105.0 - core) / (105.0 - 96.0)) / 0.1 * 3600
+        assert len(lines) == 1
+        assert f"A=Pit 105 C, Fit {mw._clock(start, now)}-" in lines[0]
+        assert "RMS 0.00 C" in lines[0]
+        assert lines[0].endswith(f"~{mw._clock(expected, now)}")
 
     def test_resets_consecutive_errors_on_success(self, base_state: WatcherState) -> None:
         base_state.consecutive_errors = 2
@@ -1624,3 +1667,55 @@ class TestPeriodicSchedule:
         span = periodic[-1] - periodic[0]
         # 4 gaps: fixed-rate ~0.8 s; the old wait-after-check scheme ~1.12 s.
         assert span == pytest.approx(4 * interval, abs=0.1)
+
+
+def test_append_sample_keeps_whole_cook() -> None:
+    now = 200_000.0
+    samples = [[now - 30 * 3600, 20.0], [now - 49 * 3600, 10.0]]
+    kept = mw._append_sample(samples, now, 90.0)
+    assert kept == [[now - 30 * 3600, 20.0], [now, 90.0]]
+
+
+class TestAmbientRiseDisturbance:
+    """A fire flare-up restarts trend and fit; recovery from a dip does not."""
+
+    def _state(self, ambients: list[tuple[float, float]], core: float = 90.0) -> WatcherState:
+        st = WatcherState()
+        st.ambient_samples = [[t, a] for t, a in ambients]
+        st.internal_samples = [[t, core] for t, _ in ambients]
+        return st
+
+    def test_spike_above_window_max(self) -> None:
+        st = self._state([(0.0, 104.0), (600.0, 106.6), (1200.0, 108.2)])
+        reason = mw._detect_disturbance(st, 1800.0, 92.9, 113.9)
+        assert reason is not None and "Ambient-Spitze" in reason
+
+    def test_recovery_after_dip_is_no_spike(self) -> None:
+        st = self._state([(0.0, 105.0), (600.0, 85.0), (1200.0, 95.0)], core=76.0)
+        assert mw._detect_disturbance(st, 1800.0, 76.0, 104.0) is None
+
+    def test_warmup_rise_is_ignored(self) -> None:
+        st = self._state([(0.0, 40.0), (600.0, 60.0), (1200.0, 80.0)], core=20.0)
+        assert mw._detect_disturbance(st, 1800.0, 20.0, 110.0) is None
+
+
+class TestTrendAbCommand:
+    @patch.object(mw, "save_state")
+    def test_trend_ab_sets_trend_start(self, _save: MagicMock, base_state: WatcherState) -> None:
+        now = datetime(2026, 10, 11, 13, 30).timestamp()
+        with patch.object(mw, "_now", return_value=now):
+            result = mw.handle_command("trend ab 12:20", base_state)
+        assert base_state.trend_ignore_before == datetime(2026, 10, 11, 12, 20).timestamp()
+        assert result == "Trend und Stall-Rate werten ab 12:20 aus."
+
+    @patch.object(mw, "save_state")
+    def test_trend_reset_clears(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.trend_ignore_before = 1000.0
+        result = mw.handle_command("trend reset", base_state)
+        assert base_state.to_dict()["trend_ignore_before"] is None  # fresh read; mypy keeps the narrowed attribute
+        assert result == "Trend und Stall-Rate werten wieder alle Daten aus."
+
+    @patch.object(mw, "save_state")
+    def test_trend_ab_invalid_clock(self, _save: MagicMock, base_state: WatcherState) -> None:
+        result = mw.handle_command("trend ab 24:00", base_state)
+        assert result is not None and result.startswith("Fehler")

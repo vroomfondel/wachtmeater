@@ -10,7 +10,7 @@ Wann erreicht der Kern die Pull-Temperatur? Der Watcher beantwortet das mit drei
 | **Lineare Watcher-Prognose** | Zeile `Watcher-Prognose bis …`   | Trend der letzten 60 Minuten. Gibt die **früheste mögliche Ankunft** an, weil die echte Kurve abflacht.              |
 | **Endphasen-Prognose**       | Block `Endphasen-Prognose bis …` | Exponentieller Fit nach dem Wrap, physikalisch begründet. Gibt eine Spanne von „frühestens“ bis „wahrscheinlich“ an. |
 
-Diese Notiz beschreibt die Endphasen-Prognose: Modell, Fit, adaptive Wahl des Fit-Fensters, Bedienung und Grenzen. Hergeleitet wurde sie am Brisket-Cook vom 10./11.10.2026 (MEATER-Cook `15f2e6f5`). Der Code steht in [`wachtmeater/core_forecast.py`](../wachtmeater/core_forecast.py), die Einbindung in den Watcher in `wachtmeater/meater_watcher.py` (`_endphase_lines`).
+Diese Notiz beschreibt die Endphasen-Prognose: Modell, Fit, Fit-Fenster, Bedienung und Grenzen. Hergeleitet wurde sie am Brisket-Cook vom 10./11.10.2026 (MEATER-Cook `15f2e6f5`). Der Code steht in [`wachtmeater/core_forecast.py`](../wachtmeater/core_forecast.py), die Einbindung in den Watcher in `wachtmeater/meater_watcher.py` (`_endphase_lines`).
 
 ---
 
@@ -51,15 +51,9 @@ Beim Cook vom 11.10. zeigte der MEATER-Ambient ~101–106 °C (Ø 103,8 °C), de
 
 ## 3. Was der Watcher berechnet
 
-Über dem Fit-Fenster berechnet der Watcher drei Varianten:
+Der Watcher rechnet **eine** Variante: $A$ fest auf der Smokertemperatur (**A = Pit**, `set pit`, Default 110 °C). Das ist die schnellste physikalisch plausible exponentielle Ankunft. Nur $c$ wird gefittet.
 
-| Variante                                    | Bedeutung                                                     |
-|---------------------------------------------|---------------------------------------------------------------|
-| **A = Pit** (fest)                          | Schnellste physikalisch plausible exponentielle Ankunft       |
-| **A = 100 °C** (fest)                       | Folie mit kochendem Saft                                      |
-| **A frei** (zwischen Ziel + 0,1 °C und Pit) | Das $A$, das am besten zu den Daten passt, mit Standardfehler |
-
-`wachtmeater eta` gibt zusätzlich A = 104 und 102 °C sowie den linearen Trend aus.
+`wachtmeater eta` (CLI) gibt weiterhin mehrere Varianten aus: A = Pit, A = 104/102/100 °C (Folie mit kochendem Saft), A frei (zwischen Ziel + 0,1 °C und Pit, mit Standardfehler) und den linearen Trend.
 
 ### Fit ohne numpy und scipy
 
@@ -77,67 +71,48 @@ Die Original-Notiz rechnete mit `scipy.optimize.curve_fit`. Im Watcher-Image wä
 
 Die Docstrings in `core_forecast.py` erklären jeden Rechenschritt im Detail.
 
-## 4. Adaptives Fit-Fenster
+## 4. Fit-Fenster
 
-Laut Original-Notiz darf **nur die Endphase** gefittet werden, also nach Stall und Wrap, sobald der Anstieg gleichmäßig ist. Direkt nach dem Wrap beschleunigt der Kern noch, und das Modell passt schlecht. Wie lange dieser Übergang dauert, hängt vom Cook ab. Deshalb wählt der Watcher keine feste Wartezeit, sondern sucht den Fit-Start bei jedem Check neu (`find_endphase_start`):
+Laut Original-Notiz darf **nur die Endphase** gefittet werden, also nach Stall und Wrap. Der Watcher startet den Fit zu einem **festen Zeitpunkt**: `endphase_settle_minutes` (Default 60) nach `wrapped`.
 
-1. Kandidaten liegen ab **60 Minuten nach `wrapped`** (`endphase_settle_minutes`) in **10-Minuten-Schritten** (`endphase_search_step_minutes`). Nach jedem Kandidaten müssen noch mindestens **60 Minuten Daten** folgen (`endphase_min_minutes`).
-2. Der **früheste** Kandidat gewinnt, bei dem der freie Fit stabil ist (`is_stable`). Früh ist gut, denn mehr Kurve bestimmt $A$ besser. Stabil heißt:
-   - **RMS ≤ 0,1 °C** (`endphase_stable_rms`). Fenster mit dem Übergang nach dem Wrap lagen bei 0,2–0,5 °C.
-   - **Standardfehler von $A$ ≤ 3 °C.** Ein kurzes Fenster hat zu wenig Krümmung, dann ist $A$ beliebig (±10 °C und mehr).
-   - **$A$ liegt mindestens einen Standardfehler über der Untergrenze.** Klebt $A$ am Ziel, wollte das Optimum eigentlich tiefer. Das Fenster ist dann noch keine Endphase, und die ETA weit in der Zukunft ist ein Artefakt der Grenze.
+- Die Kurve wird am Kernwert zum Fit-Start **verankert** ($T_0$ = erster Messwert im Fenster). Gefittet wird nur $c$ (`core_forecast.fit_fixed_ambient`), mit $A$ = Pit.
+- Die ETA wird vom **aktuellen** Messwert gerechnet: $\Delta t = \ln\frac{A - T_{now}}{A - T_Z}/c$.
+- Die erste Prognose kommt, sobald das Fenster mindestens `endphase_min_minutes` (60) Daten enthält.
+- **Störungen oder Pausen** (`trend_ignore_before`) verschieben den Fit-Start nicht. Sie wirken nur auf den linearen Trend und die Stall-Rate. Mit `trend ab HH:MM` lässt sich deren Auswertung gezielt neu ansetzen.
 
-   $A$ an der Obergrenze (Pit) ist dagegen in Ordnung, das ist eine physikalische Grenze.
-3. Gesucht wird **bei jedem Check neu**. Mit mehr Daten kann ein früherer Start akzeptabel werden: Am Export wanderte er von 08:12 auf 08:01. Pro Suche werden höchstens 36 Kandidaten geprüft.
-4. Eine **Störung oder Pause** (Deckel auf, Fühler umgesteckt, `pause`) verschiebt den frühesten Start nach hinten. So wird der Einbruch nie gefittet.
+ETAs, die mehr als 24 Stunden in der Zukunft liegen, zeigt der Watcher als „nicht absehbar (Kern steigt kaum)“. Steht der Kern eine Stunde lang auf demselben Wert, liefert der Fit sonst eine ETA Jahre in der Zukunft. Ist Pit <= Ziel, steht dort „nie (Pit <= Ziel)“.
 
-Solange kein stabiles Fenster gefunden ist, zeigt der Watcher zwei **vorläufige Schätzungen** über die letzten 60 Minuten, klar markiert: A = Pit als früheste exponentielle Ankunft und A = 100 °C als wahrscheinlichen Wert bei Folie. Bei beiden Cooks mit Nachkommastellen lag das frei gefittete A bei 97,4–98,5 °C, also nahe der Siedegrenze. Im Backtest war A = 100 °C die beste Schätzung, die vor dem stabilen Fit verfügbar ist (siehe Abschnitt 7).
+**Warum kein adaptives Fenster mehr:** Beim Brisket-Cook `15f2e6f5` am 11.10.2026 gab es gegen ~11:47–12:08 ein Aufflammen des Feuers (Ambient bis 113,9 °C, Kern +5 °C/h, danach flach). Damit scheiterte jedes Kandidaten-Fenster an RMS ≤ 0,1 (0,26–0,43 °C). Fenster nach dem Ausschlag hatten einen Standardfehler von $A$ von ±125 bis ±500 °C. Die adaptive Suche fand nie ein stabiles Fenster und fiel nur auf vorläufige Schätzungen zurück. Mit festem A = Pit = 110 °C und Fit ab 06:30 (Wrap 05:30 + 60 Min.) lag die Prognose bei ~14:38 (Daten bis 13:35, Kern 94,9 °C, $c$ ≈ 0,108/h).
 
-ETAs, die mehr als 24 Stunden in der Zukunft liegen, zeigt der Watcher als „nicht absehbar (Kern steigt kaum)“. Steht der Kern eine Stunde lang auf demselben Wert, liefert der Fit sonst eine ETA Jahre in der Zukunft.
-
-Ein Beispiel, warum eine feste Wartezeit nicht reicht. Beim Cook vom 11.10. (Wrap ~05:30, Daten bis 10:25):
-
-| Fit ab | Minuten nach Wrap | RMS A=Pit | freies A                  |
-|--------|-------------------|-----------|---------------------------|
-| 06:39  | ~70               | 0,505     | 96,6 (an der Untergrenze) |
-| 07:20  | ~110              | 0,214     | 96,6 (an der Untergrenze) |
-| 07:40  | ~130              | 0,150     | 96,6 (an der Untergrenze) |
-| 08:00  | ~150              | 0,091     | **98,5 ± 1,8**            |
+Die adaptive Suche (`find_endphase_start`) gibt es weiterhin für `wachtmeater eta --auto` (Abschnitt 6).
 
 ## 5. Bedienung im Watcher
 
 | Befehl             | Wirkung                                                                                                                                                                          |
 |--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `wrapped [<min>]`  | Markiert den Wrap als erledigt und **startet die Endphasen-Prognose**. Mit `<min>` zusätzlich wie `pause` (TempDown, Stall und Ambient-Bereich stumm, danach Max-Ambient-Reset). |
-| `wrapped at HH:MM` | Wrap nachtragen: wie `wrapped`, aber auf das letzte `HH:MM` rückdatiert, ohne Pause. Alias: `gewrappt um HH:MM`.                                                                 |
-| `set pit <C>`      | Echte Smokertemperatur als Obergrenze für $A$ (Default aus der Config: 110 °C)                                                                                                   |
+| `wrapped at HH:MM` | Wrap nachtragen: wie `wrapped`, aber auf das letzte `HH:MM` rückdatiert, ohne Pause. Ersetzt einen früheren Wrap und verwirft einen Trend-Neustart, der zum vorigen Wrap-Zeitpunkt oder später gesetzt wurde. Alias: `gewrappt um HH:MM`. |
+| `set pit <C>`      | $A$ der Endphasen-Prognose, also die echte Smokertemperatur (Default aus der Config: 110 °C)                                                                                     |
 | `reset pit`        | Zurück auf den Config-Default                                                                                                                                                    |
+| `trend ab HH:MM`   | Linearen Trend und Stall-Rate erst ab `HH:MM` auswerten (z. B. nach einem Aufflammen des Feuers)                                                                                 |
+| `trend reset`      | Trend-Neustart zurücknehmen                                                                                                                                                      |
 | `reset wrap`       | Wrap-Reminder neu scharf schalten. Löscht auch den Wrap-Zeitpunkt.                                                                                                               |
 
-Die Statuszeile zeigt `Smoker-Temp (Pit): 110 C (Standard) [gewrappt 05:24]`. Der Prognose-Block durchläuft drei Phasen.
+Die Statuszeile zeigt `Smoker-Temp (Pit): 110 C (Standard) [gewrappt 05:24]`. Nach `wrapped` bestätigt der Watcher z. B.: `Wrap als erledigt markiert (05:30). Endphasen-Prognose fittet ab 06:30 mit A = Pit 110 C (aendern mit 'set pit <C>'), Prognose fruehestens nach 60 Min. Daten.`
 
-Nach dem Wrap, noch zu wenig Daten:
-
-```
-Endphasen-Prognose: sammelt Daten (Fit fruehestens ab 06:24, erste Prognose fruehestens ~07:33)
-```
-
-Genug Daten, aber noch kein stabiler Fit:
+Der Prognose-Block hat zwei Zustände. Nach dem Wrap, noch zu wenig Daten:
 
 ```
-Endphasen-Prognose: noch kein stabiler Fit seit 06:24 (Anstieg noch nicht gleichmaessig)
-  vorlaeufig, letzte 60 Min. — frueheste (A=Pit 110 C): ~14:08
-  vorlaeufig, letzte 60 Min. — wahrscheinlich bei Folie (A=100 C): ~16:07
+Endphasen-Prognose: sammelt Daten (Fit ab 06:24, erste Prognose fruehestens ~07:33)
 ```
 
-Stabiler Fit gefunden:
+Genug Daten:
 
 ```
-Endphasen-Prognose bis 96.0 C (Fit 07:53-10:13, 15 Punkte, Pit 110 C):
-  A=Pit 110 C (frueheste): ~14:06
-  A=100 C (Folie, Saft kocht): ~15:50
-  A frei 98.5±1.8 C (RMS 0.07): ~16:48
+Endphasen-Prognose bis 96.0 C (A=Pit 110 C, Fit 06:33-10:13, 23 Punkte, RMS 0.51 C): ~13:17
 ```
+
+Sonderfälle: `...: nie (Pit <= Ziel)` und `...: nicht absehbar (Kern steigt kaum)` (ETA > 24 h).
 
 Als Ziel gilt der Pull-Override (`enable pull`), sonst das MEATER-Ziel.
 
@@ -145,11 +120,9 @@ Als Ziel gilt der Pull-Override (`enable pull`), sonst das MEATER-Ziel.
 
 | Schlüssel                      | Env                            | Default | Bedeutung                                               |
 |--------------------------------|--------------------------------|---------|---------------------------------------------------------|
-| `pit_temp`                     | `PIT_TEMP`                     | `110.0` | Echte Smokertemperatur, Obergrenze für $A$              |
-| `endphase_settle_minutes`      | `ENDPHASE_SETTLE_MINUTES`      | `60`    | Frühester Fit-Start nach `wrapped` (nur Untergrenze)    |
-| `endphase_min_minutes`         | `ENDPHASE_MIN_MINUTES`         | `60`    | Mindest-Datenspanne nach einem Fit-Start                |
-| `endphase_search_step_minutes` | `ENDPHASE_SEARCH_STEP_MINUTES` | `10`    | Schrittweite der Start-Suche                            |
-| `endphase_stable_rms`          | `ENDPHASE_STABLE_RMS`          | `0.1`   | Maximaler RMS, ab dem die Endphase als gleichmäßig gilt |
+| `pit_temp`                     | `PIT_TEMP`                     | `110.0` | $A$ der Endphasen-Prognose (echte Smokertemperatur)     |
+| `endphase_settle_minutes`      | `ENDPHASE_SETTLE_MINUTES`      | `60`    | Fester Fit-Start nach `wrapped`                         |
+| `endphase_min_minutes`         | `ENDPHASE_MIN_MINUTES`         | `60`    | Mindest-Datenspanne vor der ersten Prognose             |
 | `forecast_window_minutes`      | `FORECAST_WINDOW_MINUTES`      | `60`    | Fenster der linearen Watcher-Prognose                   |
 
 ## 6. Sondernutzung: Auswertung eines Element-Chat-Exports
@@ -218,7 +191,7 @@ Der freie Fit liegt 19 Minuten zu früh, alle festen Varianten 45–77 Minuten. 
 ## 7. Validierung
 
 - `tests/test_core_forecast.py` prüft $c$, RMS, ETA und den freien Fit (A, Standardfehler) gegen diese Tabelle. Grundlage sind die 15 exakten Messpunkte aus dem Export.
-- `tests/test_cook_replay.py` spielt den ganzen Cook mit 10-Minuten-Schritten durch den Watcher: `wrapped` um 05:24, Prognose-Phasen, adaptiver Start bei ~08:00, Einfluss von `set pit`.
+- `tests/test_cook_replay.py` spielt den ganzen Cook mit 10-Minuten-Schritten durch den Watcher: `wrapped` um 05:24, Prognose-Zustände, fester Fit-Start (Fit ab 06:33, Wrap 05:24), Einfluss von `set pit`.
 
 ### Ausgewertete Cooks
 
@@ -237,7 +210,7 @@ Die Exporte mit ganzen Grad stammen aus der Zeit vor dem WebSocket (DOM-Scraping
 
 ### Backtest
 
-Grundlage sind die Exporte vom 02.05., 23.06., 25.07. und 26./27.09.2026. Zu jedem Check der Endphase wurde nachgerechnet, was die Verfahren vorhergesagt hätten. Verglichen wurde mit der tatsächlichen Ankunft am Ziel. Fehler in Minuten, Median, negativ = zu früh.
+Grundlage sind die Exporte vom 02.05., 23.06., 25.07. und 26./27.09.2026. Der Backtest beschreibt die frühere, adaptive Watcher-Version (A = 100 °C und freies A gibt es heute nur noch im CLI). Zu jedem Check der Endphase wurde nachgerechnet, was die Verfahren vorhergesagt hätten. Verglichen wurde mit der tatsächlichen Ankunft am Ziel. Fehler in Minuten, Median, negativ = zu früh.
 
 Nur der Cook vom 26./27.09. hat Nachkommastellen und eine bekannte Ankunft:
 
@@ -251,7 +224,7 @@ Nur der Cook vom 26./27.09. hat Nachkommastellen und eine bekannte Ankunft:
 
 Die übrigen drei Cooks liefern nur ganze Grad, weil sie aus der Zeit vor dem WebSocket stammen. Allein das Runden erzeugt dort einen RMS von etwa 0,29 °C. Ein stabiler Fit ergibt sich deshalb nie, auch nicht mit gelockerter Schwelle. Bei solchen Daten ist $A$ nicht bestimmbar. Alle Verfahren, auch MEATER, streuen dort bei mehr als 2 Stunden Abstand um etwa ±1,5 Stunden.
 
-Fehler bei den drei Cooks mit ganzen Grad (Median in Minuten, Pit 120 °C; A = Pit und A = 100 °C über die letzten 60 Minuten, wie die vorläufige Anzeige):
+Fehler bei den drei Cooks mit ganzen Grad (Median in Minuten, Pit 120 °C; A = Pit und A = 100 °C über die letzten 60 Minuten, wie die vorläufige Anzeige der früheren Watcher-Version):
 
 | Verfahren  | < 1 h vorher | 1–2 h | 2–3 h | > 3 h |
 |------------|--------------|-------|-------|-------|
@@ -280,8 +253,8 @@ Alle Cooks wurden außerdem durch die aktuelle Alarmlogik des Watchers gespielt,
 
 - **Spanne statt Punkt.** Beim Cook vom 11.10. ergab sich: frühestens ~14:50 (A = Pit), wahrscheinlich gegen 16:00–16:30, mit Ausreißerrisiko Richtung 18 Uhr, falls $A$ wirklich bei ~98 °C liegt. MEATER schätzte um 10:25 ~15:30.
 - **Ein $A$ nahe dem Ziel reagiert stark auf kleine Änderungen.** ±1,8 °C bei $A$ heißen mehrere Stunden Unterschied in der ETA. Die RMS-Unterschiede zwischen den Varianten (0,07 vs. 0,09 °C) liegen nahe an der Sensorauflösung. Das ist ein Hinweis, kein Beweis.
-- **Der stabile Fit kommt spät**, etwa zwei Stunden nach Beginn der Endphase. Erst die Krümmung der späteren Kurve trennt die Varianten. Bis dahin zeigt der Watcher vorläufig A = Pit (Untergrenze) und A = 100 °C. Letzteres war im Backtest die beste frühe Schätzung.
-- **Bei ganzen Grad (Browser-Fallback) trägt die Endphasen-Prognose nicht.** Es bleibt bei den vorläufigen Schätzungen.
+- **Der Watcher zeigt nur A = Pit** und damit die früheste exponentielle Ankunft. Ein freies $A$ braucht etwa zwei Stunden Endphase, bis die Krümmung die Varianten trennt (siehe `wachtmeater eta`). A = 100 °C war im Backtest die beste frühe Schätzung.
+- **Bei ganzen Grad (Browser-Fallback) trägt die Endphasen-Prognose nicht.** Das gilt für die freie Anpassung von $A$; mit festem A = Pit rechnet der Watcher trotzdem.
 - **Die Schwellen beruhen auf wenigen Cooks** (RMS 0,1 °C, Standardfehler 3 °C), davon nur einer mit Nachkommastellen und bekannter Ankunft. Sie sind konfigurierbar bzw. in `core_forecast.py` dokumentiert und sollten nach weiteren Cooks überprüft werden.
 - **Die Zieltemperatur ist nur ein Richtwert.** Fertig ist das Brisket, wenn der Fühler wie in Butter gleitet. Ab ~93 °C prüfen.
 - **Es eilt?** Den Smoker nach dem Wrap auf 125–135 °C stellen; Pit Physics empfiehlt 275 °F. Bei Folie hebt das $A$ nur, solange die Oberfläche nicht bei ~100 °C gedeckelt ist. Butcher Paper oder ein Folienboot profitieren stärker.

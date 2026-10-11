@@ -257,30 +257,14 @@ def test_no_endphase_forecast_without_wrapped() -> None:
 def test_endphase_forecast_after_wrapped() -> None:
     r = Replay()
     r.run(len(CORE), commands={36: ["wrapped"]})
-    # 60 min after the wrap at the earliest, then 60 min of data; before the
-    # end phase is steady only a marked preliminary A=pit estimate is shown.
-    assert _endphase(r.status[44])[0].startswith("Endphasen-Prognose: sammelt Daten")
+    # Fit starts fixed 60 min after the wrap; a forecast needs 60 min of data.
+    assert _endphase(r.status[44])[0].startswith("Endphasen-Prognose: sammelt Daten (Fit ab 06:24")
     early = _endphase(r.status[55])
-    assert early[0].startswith("Endphasen-Prognose: noch kein stabiler Fit")
-    assert "frueheste (A=Pit 110 C)" in early[1]
-    assert "wahrscheinlich bei Folie (A=100 C)" in early[2]
+    assert early[0].startswith("Endphasen-Prognose bis 96.0 C (A=Pit 110 C, Fit 06:33-08:33")
     block = _endphase(r.status[len(CORE) - 1])
-    assert block[0].startswith("Endphasen-Prognose bis 96.0 C (Fit ")
-    assert "Pit 110 C" in block[0]  # config default
-    pit_line = next(l for l in block if "A=Pit 110 C" in l)
-    foil_line = next(l for l in block if "A=100 C" in l)
-
-    def _clock(line: str) -> str:
-        return line.rsplit("~", 1)[1][:5]
-
-    # A = pit is the earliest exponential arrival, after the linear lower bound
-    linear = next(l for l in r.status[len(CORE) - 1].splitlines() if l.startswith("Watcher-Prognose"))
-    assert _clock(linear) < _clock(pit_line) < _clock(foil_line)
-    # adaptive start lands where the note found the steady end phase (~08:00),
-    # with A determined by the data
-    assert "Fit 07:53-" in block[0]
-    assert any("A frei 98.5±1.8 C" in l for l in block)
-    # samples since the earliest fit start survive the normal 2 h retention
+    assert len(block) == 1
+    assert block[0].startswith("Endphasen-Prognose bis 96.0 C (A=Pit 110 C, Fit 06:33-10:13, 23 Punkte")
+    assert block[0].endswith("~13:17")
     assert r.state.wrapped_at is not None
     assert r.state.internal_samples[0][0] <= r.state.wrapped_at + 60 * 60 + 600
 

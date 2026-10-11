@@ -57,6 +57,7 @@ Environment variable reference
     ``STALL_CORE_MIN`` (``60.0``), ``STALL_CORE_MAX`` (``82.0``),
     ``STALL_DISTURBANCE_AMBIENT_DROP`` (``15.0``),
     ``STALL_DISTURBANCE_CORE_DROP`` (``1.0``),
+    ``STALL_DISTURBANCE_AMBIENT_RISE`` (``5.0``),
     ``STALL_DISTURBANCE_PAUSE_CHECKS`` (``2``),
     ``PAUSE_DEFAULT_MINUTES`` (``20``),
     ``FORECAST_WINDOW_MINUTES`` (``60``),
@@ -64,8 +65,6 @@ Environment variable reference
     ``TEMPDOWN_WARMUP_CORE_TEMP`` (``40.0``),
     ``ENDPHASE_SETTLE_MINUTES`` (``60``),
     ``ENDPHASE_MIN_MINUTES`` (``60``),
-    ``ENDPHASE_SEARCH_STEP_MINUTES`` (``10``),
-    ``ENDPHASE_STABLE_RMS`` (``0.1``),
     ``COOKEND_ERROR_THRESHOLD`` (``3``),
     ``COOKEND_PROBE_REMOVED_TEMP`` (``35.0``),
     ``STATION_OFFLINE_CALL_THRESHOLD`` (``2``).
@@ -350,6 +349,10 @@ class MonitoringConfig(_EnvMixin):
         stall_disturbance_core_drop: Core drop in C versus the previous
             reading that marks a disturbance, e.g. a re-inserted probe
             (``STALL_DISTURBANCE_CORE_DROP``).
+        stall_disturbance_ambient_rise: Ambient rise in C above the highest
+            reading of the last ``FORECAST_WINDOW_MINUTES`` that marks a
+            disturbance (fire flare-up); restarts trend and end-phase fit
+            (``STALL_DISTURBANCE_AMBIENT_RISE``).
         stall_disturbance_pause_checks: Checks to skip stall evaluation
             after a disturbance (``STALL_DISTURBANCE_PAUSE_CHECKS``).
         pause_default_minutes: Default duration of the ``pause`` command
@@ -363,15 +366,10 @@ class MonitoringConfig(_EnvMixin):
         pit_temp: Real smoker temperature in C — upper bound for the
             effective surface temperature ``A`` of the end-phase forecast;
             overridable per cook via ``set pit`` (``PIT_TEMP``).
-        endphase_settle_minutes: Earliest fit start in minutes after
-            ``wrapped`` — a lower bound only; the actual start is searched
-            adaptively (``ENDPHASE_SETTLE_MINUTES``).
+        endphase_settle_minutes: Fixed fit start in minutes after
+            ``wrapped`` (``ENDPHASE_SETTLE_MINUTES``).
         endphase_min_minutes: Minimum span of end-phase data after a fit
             start (``ENDPHASE_MIN_MINUTES``).
-        endphase_search_step_minutes: Step between candidate fit starts
-            in the adaptive search (``ENDPHASE_SEARCH_STEP_MINUTES``).
-        endphase_stable_rms: Free-fit RMS in C up to which a window counts
-            as steady end phase (``ENDPHASE_STABLE_RMS``).
         cookend_error_threshold: Consecutive fetch errors before declaring
             cook ended (``COOKEND_ERROR_THRESHOLD``).
         cookend_probe_removed_temp: Internal temp below this (after having
@@ -395,6 +393,7 @@ class MonitoringConfig(_EnvMixin):
     stall_core_max: float = env("STALL_CORE_MAX", default=82.0)
     stall_disturbance_ambient_drop: float = env("STALL_DISTURBANCE_AMBIENT_DROP", default=15.0)
     stall_disturbance_core_drop: float = env("STALL_DISTURBANCE_CORE_DROP", default=1.0)
+    stall_disturbance_ambient_rise: float = env("STALL_DISTURBANCE_AMBIENT_RISE", default=5.0)
     stall_disturbance_pause_checks: int = env("STALL_DISTURBANCE_PAUSE_CHECKS", default=2)
     pause_default_minutes: int = env("PAUSE_DEFAULT_MINUTES", default=20)
     forecast_window_minutes: int = env("FORECAST_WINDOW_MINUTES", default=60)
@@ -402,8 +401,6 @@ class MonitoringConfig(_EnvMixin):
     tempdown_warmup_core_temp: float = env("TEMPDOWN_WARMUP_CORE_TEMP", default=40.0)
     endphase_settle_minutes: int = env("ENDPHASE_SETTLE_MINUTES", default=60)
     endphase_min_minutes: int = env("ENDPHASE_MIN_MINUTES", default=60)
-    endphase_search_step_minutes: int = env("ENDPHASE_SEARCH_STEP_MINUTES", default=10)
-    endphase_stable_rms: float = env("ENDPHASE_STABLE_RMS", default=0.1)
     cookend_error_threshold: int = env("COOKEND_ERROR_THRESHOLD", default=3)
     cookend_probe_removed_temp: float = env("COOKEND_PROBE_REMOVED_TEMP", default=35.0)
     station_offline_call_threshold: int = env("STATION_OFFLINE_CALL_THRESHOLD", default=2)
