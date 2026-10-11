@@ -76,7 +76,8 @@ The docstrings in `core_forecast.py` explain every calculation step in detail.
 According to the original note, **only the end phase** may be fitted, i.e. after the stall and the wrap. The watcher starts the fit at a **fixed time**: `endphase_settle_minutes` (default 60) after `wrapped`.
 
 - $c$ and the start value $T_0$ are fitted (`core_forecast.fit_fixed_ambient`), with $A$ = pit.
-- The ETA is computed from the **current** reading: $\Delta t = \ln\frac{A - T_{now}}{A - T_Z}/c$.
+- The ETA is computed from the **current** reading: $\Delta t = \ln\frac{A - T_{now}}{A - T_Z}/c$. The measured value partly corrects the model error of a fixed $A$; from the curve value the fixed variants were 8–17 minutes worse in the 26/27 Sep backtest.
+- **Outlier in the last reading:** If it is clearly off the curve (Hampel: more than $3\sigma$ of the residuals, at least 0.3 °C), the forecast starts from the curve value, and a second line shows the ETA from the measured value for comparison. −1 °C in the last reading then moves the ETA by 6–12 instead of 32–42 minutes. In the backtest the hint never triggered.
 - The first forecast appears once the window holds at least `endphase_min_minutes` (60) of data.
 - **Disturbances or pauses** (`trend_ignore_before`) do not move the fit start. They only affect the linear trend and the stall rate. `trend ab HH:MM` restarts their evaluation on demand.
 

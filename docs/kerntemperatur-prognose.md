@@ -74,7 +74,8 @@ Die Docstrings in `core_forecast.py` erklären jeden Rechenschritt im Detail.
 Laut Original-Notiz darf **nur die Endphase** gefittet werden, also nach Stall und Wrap. Der Watcher startet den Fit zu einem **festen Zeitpunkt**: `endphase_settle_minutes` (Default 60) nach `wrapped`.
 
 - Gefittet werden $c$ und der Startwert $T_0$ (`core_forecast.fit_fixed_ambient`), mit $A$ = Pit.
-- Die ETA wird vom **aktuellen** Messwert gerechnet: $\Delta t = \ln\frac{A - T_{now}}{A - T_Z}/c$.
+- Die ETA wird vom **aktuellen** Messwert gerechnet: $\Delta t = \ln\frac{A - T_{now}}{A - T_Z}/c$. Der Messwert korrigiert den Modellfehler eines festen $A$ teilweise; ab dem Kurvenwert lagen die festen Varianten im Backtest vom 26./27.09. 8–17 Minuten schlechter.
+- **Ausreißer im letzten Messwert:** Liegt er klar neben der Kurve (Hampel: mehr als $3\sigma$ der Residuen, mindestens 0,3 °C), rechnet die Prognose ab dem Kurvenwert, und eine zweite Zeile zeigt die ETA ab Messwert zum Vergleich. −1 °C im letzten Punkt verschiebt die ETA so um 6–12 statt 32–42 Minuten. Im Backtest löste der Hinweis nie aus.
 - Die erste Prognose kommt, sobald das Fenster mindestens `endphase_min_minutes` (60) Daten enthält.
 - **Störungen oder Pausen** (`trend_ignore_before`) verschieben den Fit-Start nicht. Sie wirken nur auf den linearen Trend und die Stall-Rate. Mit `trend ab HH:MM` lässt sich deren Auswertung gezielt neu ansetzen.
 
