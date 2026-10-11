@@ -6,3 +6,5 @@ playwright>=1.60.0
 kubernetes>=37.0.1
 matrix-nio[e2e]>=0.25.0
 websockets
+numpy>=2.3.2
+scipy>=1.16.1
