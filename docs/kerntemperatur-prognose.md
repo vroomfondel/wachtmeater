@@ -91,7 +91,9 @@ Laut Original-Notiz darf **nur die Endphase** gefittet werden, also nach Stall u
 3. Gesucht wird **bei jedem Check neu**. Mit mehr Daten kann ein früherer Start akzeptabel werden: Am Export wanderte er von 08:12 auf 08:01. Pro Suche werden höchstens 36 Kandidaten geprüft.
 4. Eine **Störung oder Pause** (Deckel auf, Fühler umgesteckt, `pause`) verschiebt den frühesten Start nach hinten. So wird der Einbruch nie gefittet.
 
-Solange kein stabiles Fenster gefunden ist, zeigt der Watcher eine **vorläufige A=Pit-Schätzung** über die letzten 60 Minuten. Sie ist klar markiert und als früheste exponentielle Ankunft zu lesen.
+Solange kein stabiles Fenster gefunden ist, zeigt der Watcher zwei **vorläufige Schätzungen** über die letzten 60 Minuten, klar markiert: A = Pit als früheste exponentielle Ankunft und A = 100 °C als wahrscheinlichen Wert bei Folie. Über alle ausgewerteten Cooks lag das frei gefittete A bei 96,5–98,5 °C, also nahe der Siedegrenze. Im Backtest war A = 100 °C die beste Schätzung, die vor dem stabilen Fit verfügbar ist (siehe Abschnitt 7).
+
+ETAs, die mehr als 24 Stunden in der Zukunft liegen, zeigt der Watcher als „nicht absehbar (Kern steigt kaum)“. Steht der Kern eine Stunde lang auf demselben Wert, liefert der Fit sonst eine ETA Jahre in der Zukunft.
 
 Ein Beispiel, warum eine feste Wartezeit nicht reicht. Beim Cook vom 11.10. (Wrap ~05:30, Daten bis 10:25):
 
@@ -123,7 +125,8 @@ Genug Daten, aber noch kein stabiler Fit:
 
 ```
 Endphasen-Prognose: noch kein stabiler Fit seit 06:24 (Anstieg noch nicht gleichmaessig)
-  vorlaeufig A=Pit 110 C (frueheste, letzte 60 Min.): ~14:08
+  vorlaeufig, letzte 60 Min. — frueheste (A=Pit 110 C): ~14:08
+  vorlaeufig, letzte 60 Min. — wahrscheinlich bei Folie (A=100 C): ~16:07
 ```
 
 Stabiler Fit gefunden:
@@ -176,11 +179,26 @@ A frei (≤Pit): A=98.5±1.8 °C c=0.183/h -> 18:26
 - `tests/test_core_forecast.py` prüft $c$, RMS, ETA und den freien Fit (A, Standardfehler) gegen diese Tabelle. Grundlage sind die 15 exakten Messpunkte aus dem Export.
 - `tests/test_cook_replay.py` spielt den ganzen Cook mit 10-Minuten-Schritten durch den Watcher: `wrapped` um 05:24, Prognose-Phasen, adaptiver Start bei ~08:00, Einfluss von `set pit`.
 
+**Backtest an früheren Cooks** (Element-Exporte vom 02.05., 23.06., 25.07. und 26./27.09.2026). Zu jedem Check der Endphase wurde nachgerechnet, was die Verfahren vorhergesagt hätten. Verglichen wurde mit der tatsächlichen Ankunft am Ziel. Fehler in Minuten, Median, negativ = zu früh.
+
+Nur der Cook vom 26./27.09. hat Nachkommastellen und eine bekannte Ankunft:
+
+| Verfahren | < 1 h vorher | 1–2 h | 2–3 h |
+|---|---|---|---|
+| MEATER | +6 | −42 | −89 |
+| linear | −20 | −61 | −103 |
+| A = Pit | −20 | −56 | −90 |
+| **A = 100 °C** | **−12** | **−33** | **−48** |
+| A frei (stabil) | −4 | −20 | – |
+
+Die übrigen drei Cooks liefern nur ganze Grad, weil sie aus der Zeit vor dem WebSocket stammen. Allein das Runden erzeugt dort einen RMS von etwa 0,29 °C. Ein stabiler Fit ergibt sich deshalb nie, auch nicht mit gelockerter Schwelle. Bei solchen Daten ist $A$ nicht bestimmbar. Alle Verfahren, auch MEATER, streuen dort bei mehr als 2 Stunden Abstand um etwa ±1,5 Stunden.
+
 ## 8. Interpretation und Grenzen
 
 - **Spanne statt Punkt.** Beim Cook vom 11.10. ergab sich: frühestens ~14:50 (A = Pit), wahrscheinlich gegen 16:00–16:30, mit Ausreißerrisiko Richtung 18 Uhr, falls $A$ wirklich bei ~98 °C liegt. MEATER schätzte um 10:25 ~15:30.
 - **Ein $A$ nahe dem Ziel reagiert stark auf kleine Änderungen.** ±1,8 °C bei $A$ heißen mehrere Stunden Unterschied in der ETA. Die RMS-Unterschiede zwischen den Varianten (0,07 vs. 0,09 °C) liegen nahe an der Sensorauflösung. Das ist ein Hinweis, kein Beweis.
 - **Der stabile Fit kommt spät**, etwa zwei Stunden nach Beginn der Endphase. Erst die Krümmung der späteren Kurve trennt die Varianten. Bis dahin ist die vorläufige A=Pit-Zeile die beste Aussage, und das ist eine Untergrenze.
+- **Bei ganzen Grad (Browser-Fallback) trägt die Endphasen-Prognose nicht.** Es bleibt bei den vorläufigen Schätzungen.
 - **Die Schwellen beruhen auf einem einzigen Cook** (RMS 0,1 °C, Standardfehler 3 °C). Sie sind konfigurierbar bzw. in `core_forecast.py` dokumentiert und sollten nach weiteren Cooks überprüft werden.
 - **Die Zieltemperatur ist nur ein Richtwert.** Fertig ist das Brisket, wenn der Fühler wie in Butter gleitet. Ab ~93 °C prüfen.
 - **Es eilt?** Den Smoker nach dem Wrap auf 125–135 °C stellen; Pit Physics empfiehlt 275 °F. Bei Folie hebt das $A$ nur, solange die Oberfläche nicht bei ~100 °C gedeckelt ist. Butcher Paper oder ein Folienboot profitieren stärker.

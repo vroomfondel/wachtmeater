@@ -93,7 +93,9 @@ According to the original note, **only the end phase** may be fitted, i.e. after
 3. The search runs **anew on every check**. With more data an earlier start can become acceptable: on the export it moved from 08:12 to 08:01. At most 36 candidates are tried per search.
 4. A **disturbance or pause** (lid open, probe re-seated, `pause`) moves the earliest start later. So the dip is never fitted.
 
-As long as no stable window has been found, the watcher shows a **preliminary A=pit estimate** over the last 60 minutes. It is clearly marked and should be read as the earliest exponential arrival.
+As long as no stable window has been found, the watcher shows two **preliminary estimates** over the last 60 minutes, clearly marked: A = pit as the earliest exponential arrival, and A = 100 °C as the likely value in foil. Across all analysed cooks the freely fitted A came out at 96.5–98.5 °C, i.e. close to the boiling cap. In the backtest A = 100 °C was the best estimate available before the fit turns stable (see section 7).
+
+ETAs more than 24 hours ahead are shown as "nicht absehbar (Kern steigt kaum)" (not foreseeable, core barely rising). If the core stays at the same value for an hour, the fit would otherwise give an ETA years in the future.
 
 An example of why a fixed delay is not enough, from the 11 Oct cook (wrap ~05:30, data until 10:25):
 
@@ -125,7 +127,8 @@ Enough data, but no stable fit yet:
 
 ```
 Endphasen-Prognose: noch kein stabiler Fit seit 06:24 (Anstieg noch nicht gleichmaessig)
-  vorlaeufig A=Pit 110 C (frueheste, letzte 60 Min.): ~14:08
+  vorlaeufig, letzte 60 Min. — frueheste (A=Pit 110 C): ~14:08
+  vorlaeufig, letzte 60 Min. — wahrscheinlich bei Folie (A=100 C): ~16:07
 ```
 
 Stable fit found:
@@ -178,11 +181,26 @@ A frei (≤Pit): A=98.5±1.8 °C c=0.183/h -> 18:26
 - `tests/test_core_forecast.py` checks $c$, RMS, ETA and the free fit (A, standard error) against this table, using the 15 exact readings from the export.
 - `tests/test_cook_replay.py` replays the whole cook through the watcher in 10-minute steps: `wrapped` at 05:24, the forecast phases, the adaptive start at ~08:00, and the effect of `set pit`.
 
+**Backtest on earlier cooks** (Element exports from 2 May, 23 Jun, 25 Jul and 26/27 Sep 2026). For every end-phase check, the predictions of each method were recomputed and compared with the actual arrival at the target. Error in minutes, median, negative = too early.
+
+Only the 26/27 Sep cook has decimals and a known arrival:
+
+| Method | < 1 h before | 1–2 h | 2–3 h |
+|---|---|---|---|
+| MEATER | +6 | −42 | −89 |
+| linear | −20 | −61 | −103 |
+| A = pit | −20 | −56 | −90 |
+| **A = 100 °C** | **−12** | **−33** | **−48** |
+| A free (stable) | −4 | −20 | – |
+
+The other three cooks only have whole degrees, because they predate the WebSocket. Rounding alone produces an RMS of about 0.29 °C there. A stable fit is therefore never reached, not even with a relaxed threshold, and $A$ cannot be determined from such data. All methods, MEATER included, scatter by about ±1.5 hours more than 2 hours out.
+
 ## 8. Interpretation and limitations
 
 - **A range, not a point.** For the 11 Oct cook the result was: earliest ~14:50 (A = pit), likely around 16:00–16:30, with a risk of an outlier towards 18:00 if $A$ really is ~98 °C. MEATER estimated ~15:30 at 10:25.
 - **An $A$ close to the target reacts strongly to small changes.** ±1.8 °C in $A$ means several hours of difference in the ETA. The RMS differences between the variants (0.07 vs. 0.09 °C) are close to the sensor resolution. That is a hint, not proof.
 - **The stable fit comes late**, about two hours into the end phase. Only the curvature of the later curve separates the variants. Until then the preliminary A=pit line is the best statement, and it is a lower bound.
+- **With whole degrees (browser fallback) the end-phase forecast does not work.** Only the preliminary estimates remain.
 - **The thresholds are based on a single cook** (RMS 0.1 °C, standard error 3 °C). They are configurable or documented in `core_forecast.py` and should be reviewed after more cooks.
 - **The target temperature is only a guide.** The brisket is done when the probe slides in like butter. Start checking at ~93 °C.
 - **In a hurry?** Set the smoker to 125–135 °C after the wrap; Pit Physics recommends 275 °F. In foil this only raises $A$ while the surface is not capped at ~100 °C. Butcher paper or a foil boat benefit more.
