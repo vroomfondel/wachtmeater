@@ -87,7 +87,7 @@ exclude = '''(?x)(
     )'''
 
 [[tool.mypy.overrides]]
-module = ["cv2", "numpy", "pytesseract", "nio", "nio.*", "playwright", "playwright.*", "kubernetes", "kubernetes.*"]
+module = ["cv2", "numpy", "pytesseract", "nio", "nio.*", "playwright", "playwright.*"]
 ignore_missing_imports = true
 
 
