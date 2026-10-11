@@ -25,7 +25,14 @@ password      = "changeme"
 [monitoring]
 ambient_temp_drop_threshold = 10
 check_interval              = 600
-stall_window                = 3
+stall_window_minutes        = 30      # Stall-Rate (C/h) ueber dieses Zeitfenster
+stall_core_min              = 60.0    # Stall-Erkennung nur in diesem Kernbereich
+stall_core_max              = 82.0
+stall_disturbance_ambient_drop = 15.0 # Deckel auf / Wrappen -> Stall kurz pausieren
+stall_disturbance_core_drop    = 1.0  # Fuehler umgesteckt -> Stall kurz pausieren
+stall_disturbance_pause_checks = 2
+pause_default_minutes       = 20      # Standarddauer fuer 'pause' / 'wrapped'
+forecast_window_minutes     = 60      # Fenster fuer die eigene Restzeit-Prognose
 cookend_error_threshold     = 3
 cookend_probe_removed_temp  = 35
 # Read temperatures from the MEATER Cloud WebSocket (0.03125 C resolution)
@@ -40,7 +47,7 @@ tempalert_tempdown_enabled = true       # Ambient-Abfall vom Max (Feuer aus?)
 tempalert_ruhephase_enabled = false     # Abkühlung nach Cook
 ruhephase_target_temp = 0.0            # Zieltemp in C (0 = nicht gesetzt)
 tempalert_stall_enabled = false         # Plateau-Erkennung (Kerntemp steigt kaum)
-stall_min_delta = 0.3                   # Mindest-Anstieg in C über Stall-Window
+stall_max_rate = 4.0                    # Stall wenn Kern langsamer als X C/h steigt
 tempalert_wrap_enabled = false          # Einmaliger Wrap-Reminder
 wrap_target_temp = 0.0                  # Kerntemp in C (0 = nicht gesetzt)
 tempalert_ambient_range_enabled = false # Smoker zu heiss / zu kalt
