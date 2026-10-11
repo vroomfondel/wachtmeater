@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from wachtmeater import cfg
 from wachtmeater.meater_monitor import CookData, CookNotFoundError
 
 mc = pytest.importorskip("wachtmeater.meater_cloud")
@@ -198,8 +199,8 @@ class TestExtractCookDataHybrid:
     def _cfg(self) -> Any:
         """Run with the WebSocket preferred and screenshots off by default."""
         with (
-            patch.object(mm.cfg.monitoring, "cloud_ws_enabled", True),
-            patch.object(mm.cfg.browser, "screenshot_enabled", False),
+            patch.object(cfg.monitoring, "cloud_ws_enabled", True),
+            patch.object(cfg.browser, "screenshot_enabled", False),
         ):
             yield
 
@@ -235,7 +236,7 @@ class TestExtractCookDataHybrid:
     @patch("wachtmeater.meater_cloud.fetch_cook_data")
     def test_disabled_websocket_uses_browser(self, mock_ws: MagicMock, mock_browser: MagicMock) -> None:
         mock_browser.return_value = CookData(source="browser")
-        with patch.object(mm.cfg.monitoring, "cloud_ws_enabled", False):
+        with patch.object(cfg.monitoring, "cloud_ws_enabled", False):
             mm.extract_cook_data(self.URL)
         mock_ws.assert_not_called()
         mock_browser.assert_called_once()
@@ -245,7 +246,7 @@ class TestExtractCookDataHybrid:
     def test_screenshot_attached_when_enabled(self, mock_ws: MagicMock, mock_shot: MagicMock) -> None:
         mock_ws.return_value = CookData(internal_temp_c=95.0625, source="cloud-ws")
         mock_shot.return_value = "/data/shot.png"
-        with patch.object(mm.cfg.browser, "screenshot_enabled", True):
+        with patch.object(cfg.browser, "screenshot_enabled", True):
             cook = mm.extract_cook_data(self.URL)
         assert cook.screenshot == "/data/shot.png"
         assert cook.internal_temp_c == 95.0625
@@ -256,7 +257,7 @@ class TestExtractCookDataHybrid:
         # A dead CDP endpoint must cost the image, never the temperature.
         mock_ws.return_value = CookData(internal_temp_c=95.0625, source="cloud-ws")
         mock_shot.side_effect = mm.CdpUnavailableError("cdp down")
-        with patch.object(mm.cfg.browser, "screenshot_enabled", True):
+        with patch.object(cfg.browser, "screenshot_enabled", True):
             cook = mm.extract_cook_data(self.URL)
         assert cook.internal_temp_c == 95.0625
         assert cook.screenshot is None
