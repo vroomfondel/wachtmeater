@@ -152,6 +152,10 @@ The divisor is the share page's own `DEFAULT_DENOMINATOR = 32` (`TemperatureToCe
 
 This is an undocumented internal interface and may change without notice, which is exactly why the scraper is retained as an automatic fallback. When the watcher falls back, its status message says so (`Quelle: Browser-Fallback (nur ganze Grad)`).
 
+## End-phase forecast
+
+After `wrapped`, the watcher fits the end phase of the cook with Newton's law of heating, `T(t) = A - (A - T0)·e^(-c·t)`, using its own core readings and the real smoker temperature (`set pit`, default 110 °C) as upper bound for `A`. The fit start is searched adaptively. The status message then shows ETAs to the pull target ranging from "earliest" (`A` = pit) to "likely" (free `A`). Model, fit, adaptive window, validation and sources: [docs/kerntemperatur-prognose_en.md](docs/kerntemperatur-prognose_en.md) (German: [docs/kerntemperatur-prognose.md](docs/kerntemperatur-prognose.md)).
+
 ## Configuration
 
 Settings are loaded from a TOML config file (`wachtmeater.toml` or path in `$CONFIG`), a flat `.env` file, or plain environment variables. Existing env vars always take precedence. See `wachtmeater.toml.example` for a full annotated example.

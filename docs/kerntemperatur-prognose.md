@@ -1,0 +1,196 @@
+# Kerntemperatur-Prognose in der Endphase
+
+*English version: [kerntemperatur-prognose_en.md](kerntemperatur-prognose_en.md)*
+
+Wann erreicht der Kern die Pull-Temperatur? Der Watcher beantwortet das mit drei Prognosen, die sich ergänzen:
+
+| Prognose                     | Wo                               | Was sie aussagt                                                                                                      |
+|------------------------------|----------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| **MEATER-Restzeit**          | Zeile `Remaining:`               | Schätzung der MEATER Cloud. Fehlt sie oder ist sie 0, steht dort `unbekannt`.                                        |
+| **Lineare Watcher-Prognose** | Zeile `Watcher-Prognose bis …`   | Trend der letzten 60 Minuten. Gibt die **früheste mögliche Ankunft** an, weil die echte Kurve abflacht.              |
+| **Endphasen-Prognose**       | Block `Endphasen-Prognose bis …` | Exponentieller Fit nach dem Wrap, physikalisch begründet. Gibt eine Spanne von „frühestens“ bis „wahrscheinlich“ an. |
+
+Diese Notiz beschreibt die Endphasen-Prognose: Modell, Fit, adaptive Wahl des Fit-Fensters, Bedienung und Grenzen. Hergeleitet wurde sie am Brisket-Cook vom 10./11.10.2026 (MEATER-Cook `15f2e6f5`). Der Code steht in [`wachtmeater/core_forecast.py`](../wachtmeater/core_forecast.py), die Einbindung in den Watcher in `wachtmeater/meater_watcher.py` (`_endphase_lines`).
+
+---
+
+## 1. Physikalischer Hintergrund
+
+- **Die Garzeit hängt an der Dicke, nicht am Gewicht.** Die Wärme dringt etwa $L \approx \sqrt{\alpha \cdot t}$ tief ein, also gilt $t \approx L^2/\alpha$. Doppelte Dicke heißt etwa viermal so lange. Für Fleisch liegt die Temperaturleitfähigkeit bei $\alpha \approx 1{,}3\text{–}1{,}4 \cdot 10^{-7}\ \text{m}^2/\text{s}$ (Pit Physics).
+- **Der Stall ist Verdunstungskühlung.** Greg Blonder hat das experimentell gezeigt (AmazingRibs). Wrappen stoppt die Verdunstung weitgehend, danach steigt der Kern wieder.
+- **Eine fertige Formel für den gesamten Kernverlauf gibt es nicht.** Pit Physics sagt ausdrücklich, dass man dafür Messdaten fitten muss. Genau das macht der Watcher, aber nur für die Endphase, in der ein einfaches Modell trägt.
+
+## 2. Modell: Warum die Endphase exponentiell verläuft
+
+Die Wärmeleitung im Fleisch folgt $\partial T/\partial t = \alpha \nabla^2 T$. Als Randbedingung dient eine annähernd konstante wirksame Oberflächentemperatur $A$. Die Lösung ist eine Summe von Moden, die unterschiedlich schnell abklingen. Spät im Cook bleibt nur noch die **langsamste Mode**, und für den Kern gilt:
+
+$$T(t) = A - (A - T_0)\, e^{-c\,t}$$
+
+Das ist das Newton'sche Aufwärmgesetz. Für eine Platte der Dicke $D$ wäre idealisiert $c \approx \pi^2 \alpha / D^2$. Real ist $c$ kleiner, weil Folie bzw. Paper, der Wärmeübergang von der Luft ins Fleisch und Restverdunstung zusätzlich bremsen. Deshalb wird **$c$ aus den Daten gefittet** und nicht ausgerechnet.
+
+Die Restzeit vom aktuellen Wert $T_{now}$ bis zum Ziel $T_Z$ ist dann:
+
+$$\Delta t = \frac{1}{c}\,\ln\!\frac{A - T_{now}}{A - T_Z}$$
+
+**Folgerungen:**
+
+- Die Kurve ist **nicht linear**, ihre Steigung nimmt ständig ab. Eine lineare Hochrechnung liefert deshalb die früheste Ankunft.
+- Das Ergebnis hängt stark von $A$ ab. Liegt $A$ nur knapp über $T_Z$, wird der Nenner klein und die Restzeit sehr lang. Daher kommt das „zweite Plateau“ kurz vor 95 °C bei niedriger Smokertemperatur.
+
+### Was ist $A$?
+
+| Situation                 | wirksames $A$                                                                                                                          |
+|---------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| Obergrenze, immer         | **echte Smokertemperatur (Pit)**. Nicht der MEATER-Ambient-Wert: Der Sensor hängt über dem Fleisch und wird von ihm gekühlt.           |
+| Alufolie mit Saft         | Die Oberfläche ist durch kochenden Saft bei **~100 °C** gedeckelt (offene Folie, 1 atm).                                               |
+| Butcher Paper             | Es verdunstet weiter etwas, $A$ liegt also unter der Smokertemperatur.                                                                 |
+| Unwrapped, nach dem Stall | unter der Smokertemperatur, weil die Verdunstung noch bremst                                                                           |
+| Smoker höher drehen       | $A$ steigt. Das ist der wirksamste Hebel für die Restzeit, bei Folie aber nur, solange die Oberfläche nicht bei ~100 °C gedeckelt ist. |
+
+Beim Cook vom 11.10. zeigte der MEATER-Ambient ~101–106 °C (Ø 103,8 °C), der Smoker lag aber konstant bei **110 °C**. Deshalb nimmt der Watcher die Smokertemperatur als Obergrenze (`set pit`, Default 110 °C) und nicht den Ambient-Wert.
+
+## 3. Was der Watcher berechnet
+
+Über dem Fit-Fenster berechnet der Watcher drei Varianten:
+
+| Variante                                    | Bedeutung                                                     |
+|---------------------------------------------|---------------------------------------------------------------|
+| **A = Pit** (fest)                          | Schnellste physikalisch plausible exponentielle Ankunft       |
+| **A = 100 °C** (fest)                       | Folie mit kochendem Saft                                      |
+| **A frei** (zwischen Ziel + 0,1 °C und Pit) | Das $A$, das am besten zu den Daten passt, mit Standardfehler |
+
+`wachtmeater eta` gibt zusätzlich A = 104 und 102 °C sowie den linearen Trend aus.
+
+### Fit ohne numpy und scipy
+
+Die Original-Notiz rechnete mit `scipy.optimize.curve_fit`. Im Watcher-Image wären numpy und scipy zwei schwere neue Abhängigkeiten für einen kleinen Fit. Deshalb rechnet `core_forecast` in reinem Python:
+
+- **Warum kein geschlossener Ausdruck:** $c$ steht im Exponenten, der Fit ist also *nichtlineare* kleinste Quadrate. Man könnte logarithmieren ($\ln(A - T)$ gegen $t$) und dann eine Gerade fitten. Das gewichtet die Abweichungen aber anders: Fehler nahe $A$ werden aufgeblasen. Es liefert dann ein anderes $c$ als `curve_fit`.
+- **Festes $A$:** Es bleibt ein Parameter $c$ mit bekanntem Bereich. Den findet eine eindimensionale **Golden-Section-Suche** auf der Fehlerquadratsumme $SSE(c)$. Sie braucht weder Ableitungen noch einen Startwert, bleibt in den Grenzen und konvergiert garantiert. Jeder Schritt verkleinert das Intervall um den Faktor 0,618.
+- **Freies $A$:** Für jedes Kandidaten-$A$ wird das beste $c$ bestimmt (das „Profil“). Das Profil wird dann ebenfalls per Golden Section über $A \in [T_Z + 0{,}1;\ \text{Pit}]$ minimiert. So sind die Grenzen direkt eingebaut, und es ergibt sich dasselbe Optimum wie `curve_fit` mit `bounds`.
+- **Unsicherheit von $A$** (das „±1,8“): Sie kommt aus der Jacobi-Matrix. Die hält für jeden Messpunkt fest, wie stark der Modellwert auf eine kleine Änderung von $A$ bzw. $c$ reagiert:
+  - $\partial T/\partial A = 1 - e^{-ct}$: Am Anfang des Fensters ist das 0, am Ende fast 1. Über $A$ sagen also vor allem die späten Punkte etwas aus.
+  - $\partial T/\partial c = (A - T_0)\,t\,e^{-ct}$: Das ist in der Kurvenmitte am größten.
+
+  Aus diesen Ableitungen entsteht $\text{cov} = s^2 (J^\top J)^{-1}$ mit $s^2 = SSE/(n-2)$. Das ist dieselbe Formel, die `curve_fit` verwendet. Die Unsicherheit wird groß, wenn sich $A$ und $c$ gegenseitig ersetzen können: Ein höheres $A$ mit kleinerem $c$ ergibt fast dieselbe Kurve.
+- **Laufzeit:** etwa 0,2 s für 120 Punkte und 0,03 s für 15 Punkte. Der Watcher dünnt seine Samples auf höchstens 120 Punkte aus.
+
+Die Docstrings in `core_forecast.py` erklären jeden Rechenschritt im Detail.
+
+## 4. Adaptives Fit-Fenster
+
+Laut Original-Notiz darf **nur die Endphase** gefittet werden, also nach Stall und Wrap, sobald der Anstieg gleichmäßig ist. Direkt nach dem Wrap beschleunigt der Kern noch, und das Modell passt schlecht. Wie lange dieser Übergang dauert, hängt vom Cook ab. Deshalb wählt der Watcher keine feste Wartezeit, sondern sucht den Fit-Start bei jedem Check neu (`find_endphase_start`):
+
+1. Kandidaten liegen ab **60 Minuten nach `wrapped`** (`endphase_settle_minutes`) in **10-Minuten-Schritten** (`endphase_search_step_minutes`). Nach jedem Kandidaten müssen noch mindestens **60 Minuten Daten** folgen (`endphase_min_minutes`).
+2. Der **früheste** Kandidat gewinnt, bei dem der freie Fit stabil ist (`is_stable`). Früh ist gut, denn mehr Kurve bestimmt $A$ besser. Stabil heißt:
+   - **RMS ≤ 0,1 °C** (`endphase_stable_rms`). Fenster mit dem Übergang nach dem Wrap lagen bei 0,2–0,5 °C.
+   - **Standardfehler von $A$ ≤ 3 °C.** Ein kurzes Fenster hat zu wenig Krümmung, dann ist $A$ beliebig (±10 °C und mehr).
+   - **$A$ liegt mindestens einen Standardfehler über der Untergrenze.** Klebt $A$ am Ziel, wollte das Optimum eigentlich tiefer. Das Fenster ist dann noch keine Endphase, und die ETA weit in der Zukunft ist ein Artefakt der Grenze.
+
+   $A$ an der Obergrenze (Pit) ist dagegen in Ordnung, das ist eine physikalische Grenze.
+3. Gesucht wird **bei jedem Check neu**. Mit mehr Daten kann ein früherer Start akzeptabel werden: Am Export wanderte er von 08:12 auf 08:01. Pro Suche werden höchstens 36 Kandidaten geprüft.
+4. Eine **Störung oder Pause** (Deckel auf, Fühler umgesteckt, `pause`) verschiebt den frühesten Start nach hinten. So wird der Einbruch nie gefittet.
+
+Solange kein stabiles Fenster gefunden ist, zeigt der Watcher eine **vorläufige A=Pit-Schätzung** über die letzten 60 Minuten. Sie ist klar markiert und als früheste exponentielle Ankunft zu lesen.
+
+Ein Beispiel, warum eine feste Wartezeit nicht reicht. Beim Cook vom 11.10. (Wrap ~05:30, Daten bis 10:25):
+
+| Fit ab | Minuten nach Wrap | RMS A=Pit | freies A                  |
+|--------|-------------------|-----------|---------------------------|
+| 06:39  | ~70               | 0,505     | 96,6 (an der Untergrenze) |
+| 07:20  | ~110              | 0,214     | 96,6 (an der Untergrenze) |
+| 07:40  | ~130              | 0,150     | 96,6 (an der Untergrenze) |
+| 08:00  | ~150              | 0,091     | **98,5 ± 1,8**            |
+
+## 5. Bedienung im Watcher
+
+| Befehl | Wirkung |
+|---|---|
+| `wrapped [<min>]` | Wie `pause` (TempDown, Stall und Ambient-Bereich stumm, danach Max-Ambient-Reset). Markiert den Wrap als erledigt und **startet die Endphasen-Prognose**. |
+| `set pit <C>` | Echte Smokertemperatur als Obergrenze für $A$ (Default aus der Config: 110 °C) |
+| `reset pit` | Zurück auf den Config-Default |
+| `reset wrap` | Wrap-Reminder neu scharf schalten. Löscht auch den Wrap-Zeitpunkt. |
+
+Die Statuszeile zeigt `Smoker-Temp (Pit): 110 C (Standard) [gewrappt 05:24]`. Der Prognose-Block durchläuft drei Phasen.
+
+Nach dem Wrap, noch zu wenig Daten:
+
+```
+Endphasen-Prognose: sammelt Daten (Fit fruehestens ab 06:24, erste Prognose fruehestens ~07:33)
+```
+
+Genug Daten, aber noch kein stabiler Fit:
+
+```
+Endphasen-Prognose: noch kein stabiler Fit seit 06:24 (Anstieg noch nicht gleichmaessig)
+  vorlaeufig A=Pit 110 C (frueheste, letzte 60 Min.): ~14:08
+```
+
+Stabiler Fit gefunden:
+
+```
+Endphasen-Prognose bis 96.0 C (Fit 07:53-10:13, 15 Punkte, Pit 110 C):
+  A=Pit 110 C (frueheste): ~14:06
+  A=100 C (Folie, Saft kocht): ~15:50
+  A frei 98.5±1.8 C (RMS 0.07): ~16:48
+```
+
+Als Ziel gilt der Pull-Override (`enable pull`), sonst das MEATER-Ziel.
+
+### Konfiguration (`[monitoring]`)
+
+| Schlüssel                      | Env                            | Default | Bedeutung                                               |
+|--------------------------------|--------------------------------|---------|---------------------------------------------------------|
+| `pit_temp`                     | `PIT_TEMP`                     | `110.0` | Echte Smokertemperatur, Obergrenze für $A$              |
+| `endphase_settle_minutes`      | `ENDPHASE_SETTLE_MINUTES`      | `60`    | Frühester Fit-Start nach `wrapped` (nur Untergrenze)    |
+| `endphase_min_minutes`         | `ENDPHASE_MIN_MINUTES`         | `60`    | Mindest-Datenspanne nach einem Fit-Start                |
+| `endphase_search_step_minutes` | `ENDPHASE_SEARCH_STEP_MINUTES` | `10`    | Schrittweite der Start-Suche                            |
+| `endphase_stable_rms`          | `ENDPHASE_STABLE_RMS`          | `0.1`   | Maximaler RMS, ab dem die Endphase als gleichmäßig gilt |
+| `forecast_window_minutes`      | `FORECAST_WINDOW_MINUTES`      | `60`    | Fenster der linearen Watcher-Prognose                   |
+
+## 6. Sondernutzung: Auswertung eines Element-Chat-Exports
+
+Das Modul selbst arbeitet nur mit generischen Messpunkten `(epoch, kern, ambient)`. Für eine nachträgliche Auswertung liest [`wachtmeater/element_export.py`](../wachtmeater/element_export.py) die Statusnachrichten aus einem Element-Export (ZIP oder `export.json`):
+
+```bash
+# festes Fenster wie in der Original-Notiz
+wachtmeater eta "Element - Wachtmeater 15f2e6f5 - Chat Export - ….zip" --pit 110 --target 96.5 --since 08:00
+# Start der Endphase adaptiv suchen (ab --since bzw. ab dem ersten Messpunkt)
+wachtmeater eta "….zip" --since 06:30 --auto
+```
+
+Ausgabe für den Cook vom 11.10.2026. Sie ist identisch zur scipy-Ausgabe der Original-Notiz:
+
+```
+Fit 08:01–10:25 (15 Punkte): Kern 84.9→89.8 °C, MEATER-Ambient Ø 103.8 °C, Pit 110 °C, Ziel 96.5 °C
+linear      : 1.99 °C/h  -> 13:45  (früheste Ankunft)
+A=110.0 °C : c=0.092/h rms=0.091 -> 14:49  <- A = Pit (schnellste Exp.-Variante)
+A=104.0 °C : c=0.124/h rms=0.078 -> 15:34
+A=102.0 °C : c=0.141/h rms=0.073 -> 16:05
+A=100.0 °C : c=0.162/h rms=0.069 -> 17:01
+A frei (≤Pit): A=98.5±1.8 °C c=0.183/h -> 18:26
+```
+
+## 7. Validierung
+
+- `tests/test_core_forecast.py` prüft $c$, RMS, ETA und den freien Fit (A, Standardfehler) gegen diese Tabelle. Grundlage sind die 15 exakten Messpunkte aus dem Export.
+- `tests/test_cook_replay.py` spielt den ganzen Cook mit 10-Minuten-Schritten durch den Watcher: `wrapped` um 05:24, Prognose-Phasen, adaptiver Start bei ~08:00, Einfluss von `set pit`.
+
+## 8. Interpretation und Grenzen
+
+- **Spanne statt Punkt.** Beim Cook vom 11.10. ergab sich: frühestens ~14:50 (A = Pit), wahrscheinlich gegen 16:00–16:30, mit Ausreißerrisiko Richtung 18 Uhr, falls $A$ wirklich bei ~98 °C liegt. MEATER schätzte um 10:25 ~15:30.
+- **Ein $A$ nahe dem Ziel reagiert stark auf kleine Änderungen.** ±1,8 °C bei $A$ heißen mehrere Stunden Unterschied in der ETA. Die RMS-Unterschiede zwischen den Varianten (0,07 vs. 0,09 °C) liegen nahe an der Sensorauflösung. Das ist ein Hinweis, kein Beweis.
+- **Der stabile Fit kommt spät**, etwa zwei Stunden nach Beginn der Endphase. Erst die Krümmung der späteren Kurve trennt die Varianten. Bis dahin ist die vorläufige A=Pit-Zeile die beste Aussage, und das ist eine Untergrenze.
+- **Die Schwellen beruhen auf einem einzigen Cook** (RMS 0,1 °C, Standardfehler 3 °C). Sie sind konfigurierbar bzw. in `core_forecast.py` dokumentiert und sollten nach weiteren Cooks überprüft werden.
+- **Die Zieltemperatur ist nur ein Richtwert.** Fertig ist das Brisket, wenn der Fühler wie in Butter gleitet. Ab ~93 °C prüfen.
+- **Es eilt?** Den Smoker nach dem Wrap auf 125–135 °C stellen; Pit Physics empfiehlt 275 °F. Bei Folie hebt das $A$ nur, solange die Oberfläche nicht bei ~100 °C gedeckelt ist. Butcher Paper oder ein Folienboot profitieren stärker.
+
+## Quellen
+
+- [Pit Physics – The Science of Competition Brisket](https://www.pit-physics.com/brisket/): $L \approx \sqrt{\alpha t}$, $\alpha$-Werte, Stall = Verdunstung, Boot/Wrap bei 165–175 °F, danach 275 °F
+- [AmazingRibs – Understanding and beating the barbecue stall](https://amazingribs.com/more-technique-and-science/more-cooking-science/understanding-and-beating-barbecue-stall/): Blonders Verdunstungsexperiment
+- [AmazingRibs – Texas Crutch](https://amazingribs.com/more-technique-and-science/more-cooking-science/texas-crutch/): Wrappen mit Folie bzw. Butcher Paper
+- [AmazingRibs – Texas Brisket (PDF)](https://amazingribs.com/books/Texas-Brisket.pdf): Die Garzeit hängt vor allem an Dicke und durchschnittlicher Smokertemperatur
+- [BU Today – Everything You Know about Grilling Is Wrong](https://bu.edu/today/2016/everything-you-know-about-grilling-is-wrong): Interview mit Greg Blonder
+- Messdaten: Wachtmeater-Chat-Export des Cooks `15f2e6f5` vom 10./11.10.2026 (Element), Smoker real konstant 110 °C
+- Herleitung: private Obsidian-Notiz „Kerntemperatur-Prognose (Endphase)“, aus der diese Notiz und `core_forecast.py` hervorgegangen sind
