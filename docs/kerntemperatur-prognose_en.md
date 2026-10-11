@@ -110,7 +110,8 @@ An example of why a fixed delay is not enough, from the 11 Oct cook (wrap ~05:30
 
 | Command           | Effect                                                                                                                                         |
 |-------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| `wrapped [<min>]` | Like `pause` (mutes TempDown, stall and ambient range, then resets max ambient). Marks the wrap as done and **starts the end-phase forecast**. |
+| `wrapped [<min>]` | Marks the wrap as done and **starts the end-phase forecast**. With `<min>` it also pauses like `pause` (mutes TempDown, stall and ambient range, then resets max ambient). |
+| `wrapped at HH:MM` | Reports the wrap afterwards: like `wrapped`, but anchored at the last `HH:MM`, without a pause. |
 | `set pit <C>`     | Real smoker temperature as the upper bound for $A$ (config default: 110 °C)                                                                    |
 | `reset pit`       | Back to the config default                                                                                                                     |
 | `reset wrap`      | Re-arms the wrap reminder. Also clears the wrap time.                                                                                          |
@@ -226,14 +227,14 @@ The free fit is 19 minutes early, the fixed variants 45–77 minutes. With `--un
 
 Besides the cook of 10/11 Oct, five more Element exports were analysed:
 
-| Export | Date | Resolution | Course | Target reached | Use |
-|---|---|---|---|---|---|
-| `15f2e6f5` | 10/11 Oct | 0.1 °C | wrap ~05:30; export ends 10:25 at 89.8 °C | unknown | derivation, tests; free A = 98.5 ± 1.8 °C |
-| `e62a2cc9` | 26/27 Sep | 0.1 °C | stall 01:51–04:46, wrap 04:46 | 95 °C 08:03, 96 °C 08:44, 97 °C 09:25 | backtest; free A = 97.4–98.1 °C |
-| `8d401460` | 25 Jul | whole degrees | stall 03:22–07:00, wrap probably ~06:30 | 95 °C 13:08, 96 °C 14:10 | backtest |
-| `62bebe00` | 23 Jun | whole degrees | data gap 01:12–07:29 | 95 °C 13:06, 96 °C 13:27 | backtest |
-| `f35f7682` | 2 May | whole degrees | watcher started at 78 °C; core at 93 °C 15:45–16:57 | 93 °C 15:45, 94 °C 17:08 | backtest |
-| `758731c2` | 27 Sep | 0.1 °C | rest phase only (75.9 → 69 °C) | – | ignored |
+| Export     | Date      | Resolution    | Course                                              | Target reached                        | Use                                       |
+|------------|-----------|---------------|-----------------------------------------------------|---------------------------------------|-------------------------------------------|
+| `15f2e6f5` | 10/11 Oct | 0.1 °C        | wrap ~05:30; export ends 10:25 at 89.8 °C           | unknown                               | derivation, tests; free A = 98.5 ± 1.8 °C |
+| `e62a2cc9` | 26/27 Sep | 0.1 °C        | stall 01:51–04:46, wrap 04:46                       | 95 °C 08:03, 96 °C 08:44, 97 °C 09:25 | backtest; free A = 97.4–98.1 °C           |
+| `8d401460` | 25 Jul    | whole degrees | stall 03:22–07:00, wrap probably ~06:30             | 95 °C 13:08, 96 °C 14:10              | backtest                                  |
+| `62bebe00` | 23 Jun    | whole degrees | data gap 01:12–07:29                                | 95 °C 13:06, 96 °C 13:27              | backtest                                  |
+| `f35f7682` | 2 May     | whole degrees | watcher started at 78 °C; core at 93 °C 15:45–16:57 | 93 °C 15:45, 94 °C 17:08              | backtest                                  |
+| `758731c2` | 27 Sep    | 0.1 °C        | rest phase only (75.9 → 69 °C)                      | –                                     | ignored                                   |
 
 The whole-degree exports predate the WebSocket (DOM scraping). The smoker temperature of the older cooks is not known. The calculations used 110, 120 and 130 °C; this changes little, because the freely fitted A lies far below.
 
@@ -243,24 +244,24 @@ Based on the exports from 2 May, 23 Jun, 25 Jul and 26/27 Sep 2026. For every en
 
 Only the 26/27 Sep cook has decimals and a known arrival:
 
-| Method | < 1 h before | 1–2 h | 2–3 h |
-|---|---|---|---|
-| MEATER | +6 | −42 | −89 |
-| linear | −20 | −61 | −103 |
-| A = pit | −20 | −56 | −90 |
-| **A = 100 °C** | **−12** | **−33** | **−48** |
-| A free (stable) | −4 | −20 | – |
+| Method          | < 1 h before | 1–2 h   | 2–3 h   |
+|-----------------|--------------|---------|---------|
+| MEATER          | +6           | −42     | −89     |
+| linear          | −20          | −61     | −103    |
+| A = pit         | −20          | −56     | −90     |
+| **A = 100 °C**  | **−12**      | **−33** | **−48** |
+| A free (stable) | −4           | −20     | –       |
 
 The other three cooks only have whole degrees, because they predate the WebSocket. Rounding alone produces an RMS of about 0.29 °C there. A stable fit is therefore never reached, not even with a relaxed threshold, and $A$ cannot be determined from such data. All methods, MEATER included, scatter by about ±1.5 hours more than 2 hours out.
 
 Errors for the three whole-degree cooks (median in minutes, pit 120 °C; A = pit and A = 100 °C over the last 60 minutes, like the preliminary display):
 
-| Method | < 1 h before | 1–2 h | 2–3 h | > 3 h |
-|---|---|---|---|---|
-| MEATER | +66 | +33 | −9 | −81 |
-| linear | +14 | −4 | −53 | −100 |
-| A = pit | +11 | +3 | −46 | −69 |
-| A = 100 °C | +20 | +30 | −7 | −2 |
+| Method     | < 1 h before | 1–2 h | 2–3 h | > 3 h |
+|------------|--------------|-------|-------|-------|
+| MEATER     | +66          | +33   | −9    | −81   |
+| linear     | +14          | −4    | −53   | −100  |
+| A = pit    | +11          | +3    | −46   | −69   |
+| A = 100 °C | +20          | +30   | −7    | −2    |
 
 Some medians look good, but the spread is large: more than 3 hours out, single values are off by up to ±3 hours. Shortly before the target, MEATER is clearly too pessimistic on these cooks (up to +140 minutes).
 
@@ -268,15 +269,15 @@ Some medians look good, but the spread is large: more than 3 hours out, single v
 
 All cooks were also replayed through the watcher's current alert logic, without the commands sent manually back then:
 
-| Cook | Stall alert | actual stall | TempDown without warm-up guard | with warm-up guard (from core 40 °C) |
-|---|---|---|---|---|
-| `15f2e6f5` | 03:24 | 02:30–05:30 | 2 (wrap 05:37/05:48) | 2 (wrap; 0 with `pause`) |
-| `e62a2cc9` | 02:42 | 01:51–04:46 | ~18 (ambient spike of 117 °C during warm-up, then ~105 °C) | 1 (wrap 04:46) |
-| `8d401460` | 03:53 | 03:22–07:00 | 4 (107 °C at start) | 0 |
+| Cook       | Stall alert | actual stall | TempDown without warm-up guard                             | with warm-up guard (from core 40 °C) |
+|------------|-------------|--------------|------------------------------------------------------------|--------------------------------------|
+| `15f2e6f5` | 03:24       | 02:30–05:30  | 2 (wrap 05:37/05:48)                                       | 2 (wrap; 0 with `pause`)             |
+| `e62a2cc9` | 02:42       | 01:51–04:46  | ~18 (ambient spike of 117 °C during warm-up, then ~105 °C) | 1 (wrap 04:46)                       |
+| `8d401460` | 03:53       | 03:22–07:00  | 4 (107 °C at start)                                        | 0                                    |
 
 - Stall detection hits all three real stalls, also with whole degrees. The wrap does not cause a false stall alert.
 - For `62bebe00` and `f35f7682` it reports a "stall" at 79–80 °C after the wrap: the rise was slow there (2–3 °C/h), and whole degrees make the rate coarse. In that case the message says "Bereits gewrappt" (already wrapped) instead of "Jetzt wrappen?" (wrap now?).
-- Back then the false TempDown alerts during warm-up were worked around with `reset ambient`. The warm-up guard (`tempdown_warmup_core_temp`, default 40 °C) removes them. A wrap is covered by `pause` or `wrapped`.
+- Back then the false TempDown alerts during warm-up were worked around with `reset ambient`. The warm-up guard (`tempdown_warmup_core_temp`, default 40 °C) removes them. A wrap is covered by `pause` or `wrapped <min>`.
 
 ## 8. Interpretation and limitations
 

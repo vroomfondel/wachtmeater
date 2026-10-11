@@ -106,12 +106,13 @@ Ein Beispiel, warum eine feste Wartezeit nicht reicht. Beim Cook vom 11.10. (Wra
 
 ## 5. Bedienung im Watcher
 
-| Befehl | Wirkung |
-|---|---|
-| `wrapped [<min>]` | Wie `pause` (TempDown, Stall und Ambient-Bereich stumm, danach Max-Ambient-Reset). Markiert den Wrap als erledigt und **startet die Endphasen-Prognose**. |
-| `set pit <C>` | Echte Smokertemperatur als Obergrenze für $A$ (Default aus der Config: 110 °C) |
-| `reset pit` | Zurück auf den Config-Default |
-| `reset wrap` | Wrap-Reminder neu scharf schalten. Löscht auch den Wrap-Zeitpunkt. |
+| Befehl             | Wirkung                                                                                                                                                                          |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `wrapped [<min>]`  | Markiert den Wrap als erledigt und **startet die Endphasen-Prognose**. Mit `<min>` zusätzlich wie `pause` (TempDown, Stall und Ambient-Bereich stumm, danach Max-Ambient-Reset). |
+| `wrapped at HH:MM` | Wrap nachtragen: wie `wrapped`, aber auf das letzte `HH:MM` rückdatiert, ohne Pause. Alias: `gewrappt um HH:MM`.                                                                 |
+| `set pit <C>`      | Echte Smokertemperatur als Obergrenze für $A$ (Default aus der Config: 110 °C)                                                                                                   |
+| `reset pit`        | Zurück auf den Config-Default                                                                                                                                                    |
+| `reset wrap`       | Wrap-Reminder neu scharf schalten. Löscht auch den Wrap-Zeitpunkt.                                                                                                               |
 
 Die Statuszeile zeigt `Smoker-Temp (Pit): 110 C (Standard) [gewrappt 05:24]`. Der Prognose-Block durchläuft drei Phasen.
 
@@ -178,17 +179,17 @@ A frei (≤Pit): A=98.5±1.8 °C c=0.183/h -> 18:26
 
 **So liest man die Ausgabe:**
 
-| Teil | Bedeutung |
-|---|---|
-| `Fit 08:01–10:25 (15 Punkte)` | Fit-Fenster und Zahl der Messpunkte |
-| `Kern 84.9→89.8 °C` | Kerntemperatur am Anfang und Ende des Fensters |
-| `MEATER-Ambient Ø` | mittlerer MEATER-Ambient — nur zur Info, kein gültiges $A$ |
-| `linear … (früheste Ankunft)` | linearer Trend, die früheste Ankunft |
-| `A=… : c=…/h rms=… -> 14:49` | Exponentieller Fit mit festem $A$: Ratenkonstante $c$, RMS der Abweichungen in °C, ETA als Uhrzeit |
-| `<- A = Pit (schnellste Exp.-Variante)` | markiert die Variante mit $A$ = Pit |
-| `A frei (≤Pit): A=98.5±1.8 °C` | freier Fit, $A$ durch die Smokertemperatur begrenzt, mit Standardfehler |
-| `nie (A <= Ziel)` | $A$ liegt nicht über dem Ziel, die Kurve erreicht es nie |
-| `nicht absehbar (…)` | ETA mehr als 24 Stunden in der Zukunft, der Kern steigt kaum |
+| Teil                                    | Bedeutung                                                                                          |
+|-----------------------------------------|----------------------------------------------------------------------------------------------------|
+| `Fit 08:01–10:25 (15 Punkte)`           | Fit-Fenster und Zahl der Messpunkte                                                                |
+| `Kern 84.9→89.8 °C`                     | Kerntemperatur am Anfang und Ende des Fensters                                                     |
+| `MEATER-Ambient Ø`                      | mittlerer MEATER-Ambient — nur zur Info, kein gültiges $A$                                         |
+| `linear … (früheste Ankunft)`           | linearer Trend, die früheste Ankunft                                                               |
+| `A=… : c=…/h rms=… -> 14:49`            | Exponentieller Fit mit festem $A$: Ratenkonstante $c$, RMS der Abweichungen in °C, ETA als Uhrzeit |
+| `<- A = Pit (schnellste Exp.-Variante)` | markiert die Variante mit $A$ = Pit                                                                |
+| `A frei (≤Pit): A=98.5±1.8 °C`          | freier Fit, $A$ durch die Smokertemperatur begrenzt, mit Standardfehler                            |
+| `nie (A <= Ziel)`                       | $A$ liegt nicht über dem Ziel, die Kurve erreicht es nie                                           |
+| `nicht absehbar (…)`                    | ETA mehr als 24 Stunden in der Zukunft, der Kern steigt kaum                                       |
 
 **Optionen und Sonderfälle:**
 
@@ -223,14 +224,14 @@ Der freie Fit liegt 19 Minuten zu früh, alle festen Varianten 45–77 Minuten. 
 
 Neben dem Cook vom 10./11.10. wurden fünf weitere Element-Exporte ausgewertet:
 
-| Export | Datum | Auflösung | Verlauf | Ziel erreicht | Verwendung |
-|---|---|---|---|---|---|
-| `15f2e6f5` | 10./11.10. | 0,1 °C | Wrap ~05:30; Export endet 10:25 bei 89,8 °C | unbekannt | Herleitung, Tests; freies A = 98,5 ± 1,8 °C |
-| `e62a2cc9` | 26./27.09. | 0,1 °C | Stall 01:51–04:46, Wrap 04:46 | 95 °C 08:03, 96 °C 08:44, 97 °C 09:25 | Backtest; freies A = 97,4–98,1 °C |
-| `8d401460` | 25.07. | ganze Grad | Stall 03:22–07:00, Wrap vermutlich ~06:30 | 95 °C 13:08, 96 °C 14:10 | Backtest |
-| `62bebe00` | 23.06. | ganze Grad | Datenlücke 01:12–07:29 | 95 °C 13:06, 96 °C 13:27 | Backtest |
-| `f35f7682` | 02.05. | ganze Grad | Watcher erst bei 78 °C gestartet; Kern 15:45–16:57 bei 93 °C | 93 °C 15:45, 94 °C 17:08 | Backtest |
-| `758731c2` | 27.09. | 0,1 °C | nur Abkühlphase (75,9 → 69 °C) | – | ignoriert |
+| Export     | Datum      | Auflösung  | Verlauf                                                      | Ziel erreicht                         | Verwendung                                  |
+|------------|------------|------------|--------------------------------------------------------------|---------------------------------------|---------------------------------------------|
+| `15f2e6f5` | 10./11.10. | 0,1 °C     | Wrap ~05:30; Export endet 10:25 bei 89,8 °C                  | unbekannt                             | Herleitung, Tests; freies A = 98,5 ± 1,8 °C |
+| `e62a2cc9` | 26./27.09. | 0,1 °C     | Stall 01:51–04:46, Wrap 04:46                                | 95 °C 08:03, 96 °C 08:44, 97 °C 09:25 | Backtest; freies A = 97,4–98,1 °C           |
+| `8d401460` | 25.07.     | ganze Grad | Stall 03:22–07:00, Wrap vermutlich ~06:30                    | 95 °C 13:08, 96 °C 14:10              | Backtest                                    |
+| `62bebe00` | 23.06.     | ganze Grad | Datenlücke 01:12–07:29                                       | 95 °C 13:06, 96 °C 13:27              | Backtest                                    |
+| `f35f7682` | 02.05.     | ganze Grad | Watcher erst bei 78 °C gestartet; Kern 15:45–16:57 bei 93 °C | 93 °C 15:45, 94 °C 17:08              | Backtest                                    |
+| `758731c2` | 27.09.     | 0,1 °C     | nur Abkühlphase (75,9 → 69 °C)                               | –                                     | ignoriert                                   |
 
 Die Exporte mit ganzen Grad stammen aus der Zeit vor dem WebSocket (DOM-Scraping). Die Smokertemperatur ist bei den älteren Cooks nicht bekannt. Gerechnet wurde mit 110, 120 und 130 °C; das ändert wenig, weil das frei gefittete A weit darunter liegt.
 
@@ -240,24 +241,24 @@ Grundlage sind die Exporte vom 02.05., 23.06., 25.07. und 26./27.09.2026. Zu jed
 
 Nur der Cook vom 26./27.09. hat Nachkommastellen und eine bekannte Ankunft:
 
-| Verfahren | < 1 h vorher | 1–2 h | 2–3 h |
-|---|---|---|---|
-| MEATER | +6 | −42 | −89 |
-| linear | −20 | −61 | −103 |
-| A = Pit | −20 | −56 | −90 |
-| **A = 100 °C** | **−12** | **−33** | **−48** |
-| A frei (stabil) | −4 | −20 | – |
+| Verfahren       | < 1 h vorher | 1–2 h   | 2–3 h   |
+|-----------------|--------------|---------|---------|
+| MEATER          | +6           | −42     | −89     |
+| linear          | −20          | −61     | −103    |
+| A = Pit         | −20          | −56     | −90     |
+| **A = 100 °C**  | **−12**      | **−33** | **−48** |
+| A frei (stabil) | −4           | −20     | –       |
 
 Die übrigen drei Cooks liefern nur ganze Grad, weil sie aus der Zeit vor dem WebSocket stammen. Allein das Runden erzeugt dort einen RMS von etwa 0,29 °C. Ein stabiler Fit ergibt sich deshalb nie, auch nicht mit gelockerter Schwelle. Bei solchen Daten ist $A$ nicht bestimmbar. Alle Verfahren, auch MEATER, streuen dort bei mehr als 2 Stunden Abstand um etwa ±1,5 Stunden.
 
 Fehler bei den drei Cooks mit ganzen Grad (Median in Minuten, Pit 120 °C; A = Pit und A = 100 °C über die letzten 60 Minuten, wie die vorläufige Anzeige):
 
-| Verfahren | < 1 h vorher | 1–2 h | 2–3 h | > 3 h |
-|---|---|---|---|---|
-| MEATER | +66 | +33 | −9 | −81 |
-| linear | +14 | −4 | −53 | −100 |
-| A = Pit | +11 | +3 | −46 | −69 |
-| A = 100 °C | +20 | +30 | −7 | −2 |
+| Verfahren  | < 1 h vorher | 1–2 h | 2–3 h | > 3 h |
+|------------|--------------|-------|-------|-------|
+| MEATER     | +66          | +33   | −9    | −81   |
+| linear     | +14          | −4    | −53   | −100  |
+| A = Pit    | +11          | +3    | −46   | −69   |
+| A = 100 °C | +20          | +30   | −7    | −2    |
 
 Die Mediane sehen teils gut aus, die Spannweiten sind aber groß: Bei mehr als 3 Stunden Abstand liegen einzelne Werte bis zu ±3 Stunden daneben. MEATER ist kurz vor dem Ziel bei diesen Cooks deutlich zu pessimistisch (bis zu +140 Minuten).
 
@@ -265,15 +266,15 @@ Die Mediane sehen teils gut aus, die Spannweiten sind aber groß: Bei mehr als 3
 
 Alle Cooks wurden außerdem durch die aktuelle Alarmlogik des Watchers gespielt, ohne die damals manuell geschickten Befehle:
 
-| Cook | Stall-Alarm | tatsächlicher Stall | TempDown ohne Anheiz-Schutz | mit Anheiz-Schutz (ab Kern 40 °C) |
-|---|---|---|---|---|
-| `15f2e6f5` | 03:24 | 02:30–05:30 | 2 (Wrap 05:37/05:48) | 2 (Wrap; mit `pause` 0) |
-| `e62a2cc9` | 02:42 | 01:51–04:46 | ~18 (Ambient-Spitze 117 °C beim Anheizen, dann ~105 °C) | 1 (Wrap 04:46) |
-| `8d401460` | 03:53 | 03:22–07:00 | 4 (107 °C beim Start) | 0 |
+| Cook       | Stall-Alarm | tatsächlicher Stall | TempDown ohne Anheiz-Schutz                             | mit Anheiz-Schutz (ab Kern 40 °C) |
+|------------|-------------|---------------------|---------------------------------------------------------|-----------------------------------|
+| `15f2e6f5` | 03:24       | 02:30–05:30         | 2 (Wrap 05:37/05:48)                                    | 2 (Wrap; mit `pause` 0)           |
+| `e62a2cc9` | 02:42       | 01:51–04:46         | ~18 (Ambient-Spitze 117 °C beim Anheizen, dann ~105 °C) | 1 (Wrap 04:46)                    |
+| `8d401460` | 03:53       | 03:22–07:00         | 4 (107 °C beim Start)                                   | 0                                 |
 
 - Die Stall-Erkennung trifft alle drei echten Stalls, auch bei ganzen Grad. Der Wrap löst keinen Stall-Fehlalarm aus.
 - Bei `62bebe00` und `f35f7682` meldet sie nach dem Wrap bei 79–80 °C einen „Stall“: Der Anstieg war dort langsam (2–3 °C/h), und ganze Grad machen die Rate grob. Die Nachricht sagt in diesem Fall „Bereits gewrappt“ statt „Jetzt wrappen?“.
-- Die TempDown-Fehlalarme beim Anheizen hattest du damals per `reset ambient` umgangen. Der Anheiz-Schutz (`tempdown_warmup_core_temp`, Default 40 °C) beseitigt sie. Einen Wrap fängt `pause` bzw. `wrapped` ab.
+- Die TempDown-Fehlalarme beim Anheizen hattest du damals per `reset ambient` umgangen. Der Anheiz-Schutz (`tempdown_warmup_core_temp`, Default 40 °C) beseitigt sie. Einen Wrap fängt `pause` bzw. `wrapped <min>` ab.
 
 ## 8. Interpretation und Grenzen
 
