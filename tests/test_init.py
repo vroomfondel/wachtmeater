@@ -1,10 +1,31 @@
 """Tests for wachtmeater/__init__.py — version, logging filter, env loading."""
 
+import copy
 import os
+from collections.abc import Iterator
 from typing import Any
 
+import pytest
+
 import wachtmeater
-from wachtmeater.config import WachtmeaterConfig
+from wachtmeater.config import WachtmeaterConfig, _update_in_place
+
+
+@pytest.fixture(autouse=True)
+def _restore_cfg_and_environ() -> Iterator[None]:
+    """Undo what ``read_dot_env_to_environ`` leaves behind.
+
+    It fills ``os.environ`` via ``setdefault`` (``monkeypatch.delenv`` of an
+    unset variable does not remove it again) and updates the shared ``cfg``
+    in place — without this, test values like ``CHECK_INTERVAL=999`` would
+    leak into later tests.
+    """
+    environ = dict(os.environ)
+    saved = copy.deepcopy(wachtmeater.cfg)
+    yield
+    os.environ.clear()
+    os.environ.update(environ)
+    _update_in_place(wachtmeater.cfg, saved)
 
 
 def test_version_is_string() -> None:
@@ -184,3 +205,17 @@ def test_toml_section_aware_mapping(tmp_path, monkeypatch) -> None:  # type: ign
     wachtmeater.read_dot_env_to_environ()
     assert os.environ["BROWSER_CDP_URL"] == "http://test:9222"
     assert os.environ["SCREENSHOT_DIR"] == "/tmp/x"
+
+
+def test_reload_keeps_cfg_identity(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """``from wachtmeater import cfg`` references must see reloaded values."""
+    from wachtmeater import cfg as bound
+
+    monitoring = bound.monitoring
+    (tmp_path / ".env").write_text("CHECK_INTERVAL=4242\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CHECK_INTERVAL", raising=False)
+    wachtmeater.read_dot_env_to_environ()
+    assert wachtmeater.cfg is bound
+    assert bound.monitoring is monitoring
+    assert bound.monitoring.check_interval == 4242
