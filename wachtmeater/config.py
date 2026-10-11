@@ -60,6 +60,11 @@ Environment variable reference
     ``STALL_DISTURBANCE_PAUSE_CHECKS`` (``2``),
     ``PAUSE_DEFAULT_MINUTES`` (``20``),
     ``FORECAST_WINDOW_MINUTES`` (``60``),
+    ``PIT_TEMP`` (``110.0``),
+    ``ENDPHASE_SETTLE_MINUTES`` (``60``),
+    ``ENDPHASE_MIN_MINUTES`` (``60``),
+    ``ENDPHASE_SEARCH_STEP_MINUTES`` (``10``),
+    ``ENDPHASE_STABLE_RMS`` (``0.1``),
     ``COOKEND_ERROR_THRESHOLD`` (``3``),
     ``COOKEND_PROBE_REMOVED_TEMP`` (``35.0``),
     ``STATION_OFFLINE_CALL_THRESHOLD`` (``2``).
@@ -350,6 +355,18 @@ class MonitoringConfig(_EnvMixin):
             ``wrapped`` command (``PAUSE_DEFAULT_MINUTES``).
         forecast_window_minutes: Time window for the watcher's own linear
             ETA forecast to the pull target (``FORECAST_WINDOW_MINUTES``).
+        pit_temp: Real smoker temperature in C — upper bound for the
+            effective surface temperature ``A`` of the end-phase forecast;
+            overridable per cook via ``set pit`` (``PIT_TEMP``).
+        endphase_settle_minutes: Earliest fit start in minutes after
+            ``wrapped`` — a lower bound only; the actual start is searched
+            adaptively (``ENDPHASE_SETTLE_MINUTES``).
+        endphase_min_minutes: Minimum span of end-phase data after a fit
+            start (``ENDPHASE_MIN_MINUTES``).
+        endphase_search_step_minutes: Step between candidate fit starts
+            in the adaptive search (``ENDPHASE_SEARCH_STEP_MINUTES``).
+        endphase_stable_rms: Free-fit RMS in C up to which a window counts
+            as steady end phase (``ENDPHASE_STABLE_RMS``).
         cookend_error_threshold: Consecutive fetch errors before declaring
             cook ended (``COOKEND_ERROR_THRESHOLD``).
         cookend_probe_removed_temp: Internal temp below this (after having
@@ -376,6 +393,11 @@ class MonitoringConfig(_EnvMixin):
     stall_disturbance_pause_checks: int = env("STALL_DISTURBANCE_PAUSE_CHECKS", default=2)
     pause_default_minutes: int = env("PAUSE_DEFAULT_MINUTES", default=20)
     forecast_window_minutes: int = env("FORECAST_WINDOW_MINUTES", default=60)
+    pit_temp: float = env("PIT_TEMP", default=110.0)
+    endphase_settle_minutes: int = env("ENDPHASE_SETTLE_MINUTES", default=60)
+    endphase_min_minutes: int = env("ENDPHASE_MIN_MINUTES", default=60)
+    endphase_search_step_minutes: int = env("ENDPHASE_SEARCH_STEP_MINUTES", default=10)
+    endphase_stable_rms: float = env("ENDPHASE_STABLE_RMS", default=0.1)
     cookend_error_threshold: int = env("COOKEND_ERROR_THRESHOLD", default=3)
     cookend_probe_removed_temp: float = env("COOKEND_PROBE_REMOVED_TEMP", default=35.0)
     station_offline_call_threshold: int = env("STATION_OFFLINE_CALL_THRESHOLD", default=2)
@@ -568,6 +590,10 @@ class WatcherState:
     # ``pause`` / ``wrapped``: epoch until which TempDown, stall and the
     # ambient range alert are muted (None = not paused)
     pause_until: float | None = None
+    # Epoch of the ``wrapped`` command — anchors the end-phase forecast fit
+    wrapped_at: float | None = None
+    # Per-cook real smoker temperature in C (None = config ``pit_temp``)
+    pit_temp: float | None = None
     # Startup behaviour
     startup_test_call_enabled: bool = True
     # Per-cook check-interval override in seconds (None = use config default)

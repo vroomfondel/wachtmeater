@@ -74,6 +74,11 @@ class TestFromEnvironUsesDefaults:
             "STALL_CORE_MAX",
             "STALL_DISTURBANCE_PAUSE_CHECKS",
             "PAUSE_DEFAULT_MINUTES",
+            "PIT_TEMP",
+            "ENDPHASE_SETTLE_MINUTES",
+            "ENDPHASE_MIN_MINUTES",
+            "ENDPHASE_SEARCH_STEP_MINUTES",
+            "ENDPHASE_STABLE_RMS",
             "AMBIENT_TEMP_DROP_THRESHOLD",
         ):
             monkeypatch.delenv(key, raising=False)
@@ -84,6 +89,11 @@ class TestFromEnvironUsesDefaults:
         assert cfg.stall_core_max == 82.0
         assert cfg.stall_disturbance_pause_checks == 2
         assert cfg.pause_default_minutes == 20
+        assert cfg.pit_temp == 110.0
+        assert cfg.endphase_settle_minutes == 60
+        assert cfg.endphase_search_step_minutes == 10
+        assert cfg.endphase_stable_rms == 0.1
+        assert cfg.endphase_min_minutes == 60
         assert cfg.ambient_temp_drop_threshold == 10
 
 

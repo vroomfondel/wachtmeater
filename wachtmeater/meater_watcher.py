@@ -37,7 +37,12 @@ Supported Matrix commands (case-insensitive):
       for *min* minutes (default 20), e.g. while wrapping; the ambient
       high-water mark is reset when the pause ends.  Pull, offline and
       cook-end alerts stay active.
-    - ``wrapped [<min>]``           — Like ``pause`` and marks the wrap as done.
+    - ``wrapped [<min>]``           — Like ``pause`` and marks the wrap as done;
+      also anchors the end-phase forecast (exponential fit, see
+      ``wachtmeater.core_forecast``).
+    - ``set pit <temp>``            — Real smoker temperature in C for the
+      end-phase forecast (default from config, 110 C).
+    - ``reset pit``                 — Back to the config default.
     - ``resume``                    — End a pause early.
     - ``enable cookend``            — Enable cook-end detection (auto-stop).
     - ``disable cookend``           — Disable cook-end detection.
@@ -71,6 +76,8 @@ from loguru import logger
 
 from wachtmeater import cfg, read_dot_env_to_environ
 from wachtmeater.config import AlertDefaultsConfig, WatcherState
+from wachtmeater.core_forecast import Reading, find_endphase_start, is_stable, thin
+from wachtmeater.core_forecast import forecast as core_forecast
 from wachtmeater.messaging import MessagingBackend
 
 read_dot_env_to_environ()
@@ -141,6 +148,21 @@ WINDOW_MIN_COVERAGE: float = 0.9
 WINDOW_SLACK: float = 1.1
 SAMPLE_RETENTION_SECONDS: int = 2 * 60 * max(STALL_WINDOW_MINUTES, FORECAST_WINDOW_MINUTES)
 
+# End-phase forecast (exponential fit from ``wrapped`` on, ``set pit``)
+PIT_TEMP_DEFAULT: float = cfg.monitoring.pit_temp
+# Earliest fit start after ``wrapped``; the actual start is searched adaptively
+ENDPHASE_SETTLE_MINUTES: int = cfg.monitoring.endphase_settle_minutes
+ENDPHASE_MIN_MINUTES: int = cfg.monitoring.endphase_min_minutes
+ENDPHASE_SEARCH_STEP_MINUTES: int = cfg.monitoring.endphase_search_step_minutes
+ENDPHASE_STABLE_RMS: float = cfg.monitoring.endphase_stable_rms
+ENDPHASE_FOIL_CAP: float = 100.0
+"""Extra fixed ``A``: in foil with juice the surface is capped near boiling."""
+ENDPHASE_MAX_POINTS: int = 120
+"""Samples are thinned to this many for the fit (pure-Python cost per check)."""
+ENDPHASE_MAX_RETENTION_SECONDS: int = 24 * 3600
+ENDPHASE_PIT_BOUND_EPS: float = 0.2
+"""Free ``A`` within this distance [C] below the pit is reported as at the bound."""
+
 # Cook-end detection: consecutive errors before declaring cook ended
 COOKEND_ERROR_THRESHOLD: int = cfg.monitoring.cookend_error_threshold
 # Internal temp below this after having been above 50 C => probe removed
@@ -203,6 +225,18 @@ def save_state(state: WatcherState) -> None:
     state.last_check = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(STATE_FILE, "w") as f:
         json.dump(state.to_dict(), f, indent=2)
+
+
+def effective_pit_temp(state: WatcherState) -> float:
+    """Return the real smoker temperature used for the end-phase forecast.
+
+    Args:
+        state: Current watcher state.
+
+    Returns:
+        The per-cook ``set pit`` value, otherwise the config default.
+    """
+    return state.pit_temp if state.pit_temp is not None else PIT_TEMP_DEFAULT
 
 
 def effective_check_interval(state: WatcherState) -> int:
@@ -451,20 +485,31 @@ def _detect_disturbance(
     return None
 
 
-def _append_sample(samples: list[list[float]], now: float, value: float | None) -> list[list[float]]:
+def _append_sample(
+    samples: list[list[float]],
+    now: float,
+    value: float | None,
+    keep_since: float | None = None,
+) -> list[list[float]]:
     """Append a reading and drop samples older than the retention period.
 
     Args:
         samples: Existing ``[ts, value]`` samples.
         now: Current epoch seconds.
         value: New reading (``None`` is not recorded).
+        keep_since: Additionally keep everything from this epoch on (the
+            end-phase fit window), capped at
+            ``ENDPHASE_MAX_RETENTION_SECONDS``.
 
     Returns:
         The pruned sample list including the new reading.
     """
     if value is not None:
         samples = [*samples, [now, value]]
-    return [p for p in samples if p[0] >= now - SAMPLE_RETENTION_SECONDS]
+    cutoff = now - SAMPLE_RETENTION_SECONDS
+    if keep_since is not None:
+        cutoff = max(min(cutoff, keep_since), now - ENDPHASE_MAX_RETENTION_SECONDS)
+    return [p for p in samples if p[0] >= cutoff]
 
 
 def _end_pause(state: WatcherState, now: float) -> None:
@@ -518,6 +563,133 @@ def _remaining_known(remaining: str | None, remaining_minutes: int | None) -> bo
     if remaining_minutes is not None:
         return remaining_minutes > 0
     return remaining not in ("0m", "0h 0m") and "estimat" not in remaining.lower()
+
+
+def _clock(ts: float, now: float) -> str:
+    """Format an epoch as ``HH:MM``, with the date when it is not today.
+
+    Args:
+        ts: Epoch seconds to format.
+        now: Current epoch seconds (defines "today").
+
+    Returns:
+        Local wall-clock string.
+    """
+    dt = datetime.fromtimestamp(ts)
+    return dt.strftime("%H:%M" if dt.date() == datetime.fromtimestamp(now).date() else "%d.%m. %H:%M")
+
+
+def _endphase_earliest(state: WatcherState) -> float | None:
+    """Return the earliest epoch the end-phase fit may start at.
+
+    ``ENDPHASE_SETTLE_MINUTES`` after ``wrapped`` — a lower bound only, the
+    actual start is searched from here (``find_endphase_start``).  A later
+    disturbance or pause moves it forward, so the dip is never fitted.
+
+    Args:
+        state: Watcher state.
+
+    Returns:
+        The earliest start, or ``None`` before ``wrapped``.
+    """
+    if state.wrapped_at is None:
+        return None
+    start = state.wrapped_at + ENDPHASE_SETTLE_MINUTES * 60
+    if state.trend_ignore_before is not None:
+        start = max(start, state.trend_ignore_before)
+    return start
+
+
+def _endphase_lines(state: WatcherState, now: float, current_internal: float | None, target: float | None) -> list[str]:
+    """Build the end-phase forecast block (exponential fit after the wrap).
+
+    The fit start is found adaptively on every check: from
+    ``_endphase_earliest`` on, the earliest window that fits the steady end
+    phase (``core_forecast.is_stable``) wins — how long the post-wrap
+    transient lasts depends on the cook, so no fixed delay is used.  It is
+    searched anew each time because more data can make an earlier start
+    acceptable (more curve, better ``A``).
+
+    With a stable window it shows ``A`` = pit (earliest exponential
+    arrival), ``A`` = 100 C (foil, boiling juice) and the free fit.  Without
+    one yet, a preliminary ``A`` = pit estimate over the latest
+    ``ENDPHASE_MIN_MINUTES`` is shown, clearly marked.
+
+    Args:
+        state: Watcher state holding the samples.
+        now: Current epoch seconds.
+        current_internal: Current core temperature.
+        target: Effective pull target (override or MEATER target).
+
+    Returns:
+        Status lines; empty before ``wrapped``, without a target or once the
+        target is reached.
+    """
+    earliest = _endphase_earliest(state)
+    if earliest is None or current_internal is None or not target or current_internal >= target:
+        return []
+    pit = effective_pit_temp(state)
+    min_span = ENDPHASE_MIN_MINUTES * 60
+    readings: list[Reading] = [(p[0], p[1], None) for p in state.internal_samples if p[0] >= earliest]
+    if len(readings) < 3 or readings[-1][0] - readings[0][0] < min_span:
+        first = readings[0][0] if readings else max(earliest, now)
+        return [
+            f"Endphasen-Prognose: sammelt Daten (Fit fruehestens ab {_clock(earliest, now)}, "
+            f"erste Prognose fruehestens ~{_clock(first + min_span, now)})"
+        ]
+
+    def _eta(hours: float | None, ref: float) -> str:
+        return f"~{_clock(ref + hours * 3600, now)}" if hours is not None else "nie (A <= Ziel)"
+
+    fit_start = find_endphase_start(
+        readings,
+        target,
+        pit,
+        step_s=ENDPHASE_SEARCH_STEP_MINUTES * 60,
+        min_span_s=min_span,
+        rms_max=ENDPHASE_STABLE_RMS,
+    )
+    fc = None
+    if fit_start is not None:
+        fc = core_forecast(
+            thin([r for r in readings if r[0] >= fit_start], ENDPHASE_MAX_POINTS),
+            target=target,
+            pit=pit,
+            fixed_ambients=(ENDPHASE_FOIL_CAP,),
+        )
+        # The search judged a thinned window; confirm on the full one.
+        if not is_stable(fc, ENDPHASE_STABLE_RMS):
+            fc = None
+
+    if fc is None:
+        lines = [
+            f"Endphasen-Prognose: noch kein stabiler Fit seit {_clock(earliest, now)} "
+            f"(Anstieg noch nicht gleichmaessig)"
+        ]
+        recent = thin([r for r in readings if r[0] >= readings[-1][0] - min_span], ENDPHASE_MAX_POINTS)
+        prelim = core_forecast(recent, target=target, pit=pit, fixed_ambients=())
+        pit_fit = next((f for f in prelim.fixed if f.ambient == pit), None)
+        if pit_fit is not None:
+            lines.append(
+                f"  vorlaeufig A=Pit {pit:g} C (frueheste, letzte {ENDPHASE_MIN_MINUTES} Min.): "
+                f"{_eta(pit_fit.eta_hours, prelim.now)}"
+            )
+        return lines
+
+    lines = [
+        f"Endphasen-Prognose bis {target:.1f} C (Fit {_clock(fc.start, now)}-{_clock(fc.now, now)}, "
+        f"{fc.points} Punkte, Pit {pit:g} C):"
+    ]
+    for f in fc.fixed:
+        label = f"A=Pit {pit:g} C (frueheste)" if f.ambient == pit else f"A={f.ambient:g} C (Folie, Saft kocht)"
+        lines.append(f"  {label}: {_eta(f.eta_hours, fc.now)}")
+    if fc.free is not None:
+        err = f"±{fc.free.ambient_stderr:.1f}" if fc.free.ambient_stderr is not None else ""
+        note = " (an Obergrenze = Pit)" if pit - fc.free.ambient < ENDPHASE_PIT_BOUND_EPS else ""
+        lines.append(
+            f"  A frei {fc.free.ambient:.1f}{err} C (RMS {fc.free.rms:.2f}): {_eta(fc.free.eta_hours, fc.now)}{note}"
+        )
+    return lines
 
 
 def _forecast_line(state: WatcherState, now: float, current_internal: float | None, target: float | None) -> str | None:
@@ -639,6 +811,13 @@ def _alert_summary(state: WatcherState) -> list[str]:
         lines.append(s)
     else:
         lines.append("Station-Offline-Alert: AUS")
+
+    # Real smoker temperature for the end-phase forecast
+    pit_src = "set pit" if state.pit_temp is not None else "Standard"
+    s = f"Smoker-Temp (Pit): {effective_pit_temp(state):g} C ({pit_src})"
+    if state.wrapped_at is not None:
+        s += f" [gewrappt {_clock(state.wrapped_at, _now())}]"
+    lines.append(s)
 
     # Check interval
     interval = effective_check_interval(state)
@@ -815,7 +994,9 @@ def run_meater_check(
     # After a disturbance the trend restarts from the next reading and the
     # stall evaluation sits out a few checks.
     disturbance = _detect_disturbance(state, now, current_internal, current_ambient)
-    state.internal_samples = _append_sample(state.internal_samples, now, current_internal)
+    state.internal_samples = _append_sample(
+        state.internal_samples, now, current_internal, keep_since=_endphase_earliest(state)
+    )
     state.ambient_samples = _append_sample(state.ambient_samples, now, current_ambient)
     stall_cooling_down = False
     if disturbance:
@@ -850,6 +1031,7 @@ def run_meater_check(
     forecast = _forecast_line(state, now, current_internal, effective_target)
     if forecast:
         lines.append(forecast)
+    lines.extend(_endphase_lines(state, now, current_internal, effective_target))
     if elapsed:
         lines.append(f"Elapsed: {elapsed}")
     lines.append(f"Status: {cook_status}")
@@ -1095,7 +1277,10 @@ reset wrap                - Wrap-Alert zuruecksetzen
 reset ambient             - Max-Ambient-Hoechstwert zuruecksetzen
 pause [<min>]             - Deckel auf/Wrappen: TempDown, Stall, Ambient-Bereich stumm (Standard {PAUSE_DEFAULT_MINUTES} Min.),
                             danach Max-Ambient automatisch zurueckgesetzt (Pull/Offline/Cook-Ende bleiben aktiv)
-wrapped [<min>]           - Wie pause, markiert zusaetzlich Wrap als erledigt
+wrapped [<min>]           - Wie pause, markiert zusaetzlich Wrap als erledigt und startet die
+                            Endphasen-Prognose (Fit-Start adaptiv, fruehestens {ENDPHASE_SETTLE_MINUTES} Min. nach dem Wrap)
+set pit <temp>            - Echte Smokertemperatur in C fuer die Endphasen-Prognose (Standard {PIT_TEMP_DEFAULT:g})
+reset pit                 - Smokertemperatur auf Standard zuruecksetzen
 resume                    - Pause vorzeitig beenden
 testcall [<text>]         - Testanruf bei Pitmaster mit beliebigem Text
 set interval <sek>        - Check-Intervall in Sekunden setzen
@@ -1242,6 +1427,7 @@ def handle_command(body: str, state: WatcherState) -> str | None:
 
     if text == "reset wrap":
         state.wrap_alerted = False
+        state.wrapped_at = None
         _clear_pending_call(state, "wrap")
         save_state(state)
         return "Wrap-Alert zurueckgesetzt. Kann erneut ausloesen."
@@ -1312,9 +1498,16 @@ def handle_command(body: str, state: WatcherState) -> str | None:
             f"Cook-Ende-Alarm bleiben aktiv. Vorzeitig beenden mit 'resume'."
         )
         if m.group(1) in ("wrapped", "gewrappt"):
+            now = _now()
             state.wrap_alerted = True
+            state.wrapped_at = now
             _clear_pending_call(state, "wrap")
-            reply += "\nWrap als erledigt markiert."
+            reply += (
+                f"\nWrap als erledigt markiert. Endphasen-Prognose sucht ab "
+                f"{_clock(now + ENDPHASE_SETTLE_MINUTES * 60, now)} den Beginn der gleichmaessigen Endphase "
+                f"(Pit {effective_pit_temp(state):g} C; aendern mit 'set pit <C>'), Prognose fruehestens "
+                f"nach {ENDPHASE_MIN_MINUTES} Min. Daten."
+            )
         save_state(state)
         return reply
 
@@ -1366,6 +1559,24 @@ def handle_command(body: str, state: WatcherState) -> str | None:
         state.tempalert_station_offline_enabled = False
         save_state(state)
         return "Station-Offline-Alert deaktiviert."
+
+    # --- set / reset real smoker (pit) temperature ---
+    m = re.match(r"(?:set\s+)?(?:pit|smoker)\s+(\d+(?:\.\d+)?)\s*$", text)
+    if m:
+        pit = float(m.group(1))
+        if not 50 <= pit <= 300:
+            return "Fehler: Smokertemperatur muss zwischen 50 und 300 C liegen."
+        state.pit_temp = pit
+        save_state(state)
+        return (
+            f"Smokertemperatur auf {pit:g} C gesetzt (Obergrenze fuer die Endphasen-Prognose; "
+            f"Standard {PIT_TEMP_DEFAULT:g} C)."
+        )
+
+    if text in ("reset pit", "reset smoker", "disable pit"):
+        state.pit_temp = None
+        save_state(state)
+        return f"Smokertemperatur auf Standard zurueckgesetzt ({PIT_TEMP_DEFAULT:g} C)."
 
     # --- set / reset check interval ---
     if text in ("reset interval", "reset intervall", "set interval default", "set intervall default"):

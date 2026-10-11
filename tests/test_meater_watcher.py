@@ -481,6 +481,44 @@ class TestHandleCommand:
         assert any(l.startswith("Pause: AKTIV (noch 12 Min.") for l in lines)
 
     @patch.object(mw, "save_state")
+    def test_set_pit(self, _save: MagicMock, base_state: WatcherState) -> None:
+        result = mw.handle_command("set pit 125", base_state)
+        assert base_state.pit_temp == 125.0
+        assert mw.effective_pit_temp(base_state) == 125.0
+        assert result is not None and "125" in result
+
+    @patch.object(mw, "save_state")
+    def test_pit_out_of_range_rejected(self, _save: MagicMock, base_state: WatcherState) -> None:
+        result = mw.handle_command("pit 20", base_state)
+        assert result is not None and result.startswith("Fehler")
+        assert base_state.pit_temp is None
+
+    @patch.object(mw, "save_state")
+    def test_reset_pit_uses_config_default(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.pit_temp = 125.0
+        mw.handle_command("reset pit", base_state)
+        assert _field(base_state, "pit_temp") is None
+        assert mw.effective_pit_temp(base_state) == mw.PIT_TEMP_DEFAULT == 110.0
+
+    @patch.object(mw, "save_state")
+    def test_pit_in_summary(self, _save: MagicMock, base_state: WatcherState) -> None:
+        assert "Smoker-Temp (Pit): 110 C (Standard)" in mw._alert_summary(base_state)
+
+    @patch.object(mw, "save_state")
+    def test_wrapped_anchors_endphase_and_reset_wrap_clears(self, _save: MagicMock, base_state: WatcherState) -> None:
+        with patch.object(mw, "_now", return_value=1000.0):
+            result = mw.handle_command("wrapped", base_state)
+        assert base_state.wrapped_at == 1000.0
+        assert result is not None and "Endphasen-Prognose" in result
+        mw.handle_command("reset wrap", base_state)
+        assert _field(base_state, "wrapped_at") is None
+
+    @patch.object(mw, "save_state")
+    def test_pause_does_not_anchor_endphase(self, _save: MagicMock, base_state: WatcherState) -> None:
+        mw.handle_command("pause", base_state)
+        assert base_state.wrapped_at is None
+
+    @patch.object(mw, "save_state")
     def test_unknown_command(self, _save: MagicMock, base_state: WatcherState) -> None:
         assert mw.handle_command("xyzzy", base_state) is None
 

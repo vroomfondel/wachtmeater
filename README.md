@@ -100,7 +100,9 @@ Send these in the Matrix room the bot has joined (case-insensitive):
 | `reset wrap` | Reset wrap alert (re-arms after it fired) |
 | `reset ambient` | Clear the tracked ambient high-water mark (`Max Ambient`). The next check re-seeds it from the current reading, so `tempdown` measures its drop from there. Use after deliberately turning the fire down. Aliases: `reset maxambient`, `reset max ambient`, `ambient reset` |
 | `pause [<min>]` | Lid open / wrapping: mute `tempdown`, stall and ambient range for `<min>` minutes (default `PAUSE_DEFAULT_MINUTES`); the ambient high-water mark is reset when the pause ends. Pull, offline and cook-end alerts stay active. Shown with remaining time in the status |
-| `wrapped [<min>]` | Like `pause`, and marks the wrap as done |
+| `wrapped [<min>]` | Like `pause`, marks the wrap as done and starts the end-phase forecast: the watcher fits `T(t) = A - (A - T0)·e^(-c·t)` to its own core readings. The fit start is searched adaptively (earliest window from `ENDPHASE_SETTLE_MINUTES` after the wrap whose free fit has RMS ≤ `ENDPHASE_STABLE_RMS` and an `A` clearly determined by the data); until then a preliminary `A` = pit estimate is shown. Then it shows ETAs for `A` = pit (earliest), `A` = 100 °C (foil, boiling juice) and a free `A` |
+| `set pit <temp>` | Real smoker temperature (°C) — upper bound for `A` in the end-phase forecast (the MEATER ambient reads low, it is cooled by the meat). Default `PIT_TEMP` |
+| `reset pit` | Back to `PIT_TEMP` |
 | `resume` | End a pause early |
 | `testcall [<text>]` | Trigger a SIP phone call to the pitmaster with optional spoken text (default: `Wachtmeater Testanruf`). The text keeps its original case so TTS pronounces names correctly. |
 | `hilfe` / `help` / `?` | Show available commands |
@@ -183,6 +185,11 @@ cp wachtmeater.toml.example wachtmeater.local.toml
 | `STALL_DISTURBANCE_PAUSE_CHECKS` | Checks stall detection sits out after a disturbance | `2` |
 | `PAUSE_DEFAULT_MINUTES` | Default duration of `pause` / `wrapped` | `20` |
 | `FORECAST_WINDOW_MINUTES` | Window for the watcher's own linear ETA forecast to the pull target | `60` |
+| `PIT_TEMP` | Real smoker temperature (°C) for the end-phase forecast, overridable per cook via `set pit` | `110.0` |
+| `ENDPHASE_SETTLE_MINUTES` | Earliest end-phase fit start after `wrapped` (lower bound; the actual start is searched adaptively) | `60` |
+| `ENDPHASE_SEARCH_STEP_MINUTES` | Step between candidate fit starts in the adaptive search | `10` |
+| `ENDPHASE_STABLE_RMS` | Free-fit RMS (°C) up to which a window counts as steady end phase | `0.1` |
+| `ENDPHASE_MIN_MINUTES` | Minimum end-phase data before the exponential forecast is shown | `60` |
 | `AMBIENT_TEMP_DROP_THRESHOLD` | Ambient temp drop (°C) to trigger fire-out alert | `10` |
 | `COOKEND_ERROR_THRESHOLD` | Consecutive fetch errors before declaring cook ended | `3` |
 | `COOKEND_PROBE_REMOVED_TEMP` | Internal temp (°C) below which probe counts as removed | `35.0` |

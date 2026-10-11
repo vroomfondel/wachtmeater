@@ -236,3 +236,60 @@ def test_alert_message_send_failure_is_retried_and_not_marked() -> None:
     assert r.alerts("Wrap-Reminder!") == [31]
     assert not any("Wrap-Reminder!" in c for _, c in r.calls)
     assert r.state.wrap_alerted is True
+
+
+def _endphase(status: str) -> list[str]:
+    lines = status.splitlines()
+    i = next((n for n, l in enumerate(lines) if l.startswith("Endphasen-Prognose")), None)
+    if i is None:
+        return []
+    block = [lines[i]]
+    block += [l for l in lines[i + 1 :] if l.startswith("  ")][:4]
+    return block
+
+
+def test_no_endphase_forecast_without_wrapped() -> None:
+    r = Replay()
+    r.run(len(CORE), commands={36: ["pause"]})
+    assert _endphase(r.status[len(CORE) - 1]) == []
+
+
+def test_endphase_forecast_after_wrapped() -> None:
+    r = Replay()
+    r.run(len(CORE), commands={36: ["wrapped"]})
+    # 60 min after the wrap at the earliest, then 60 min of data; before the
+    # end phase is steady only a marked preliminary A=pit estimate is shown.
+    assert _endphase(r.status[44])[0].startswith("Endphasen-Prognose: sammelt Daten")
+    early = _endphase(r.status[55])
+    assert early[0].startswith("Endphasen-Prognose: noch kein stabiler Fit")
+    assert "vorlaeufig A=Pit 110 C" in early[1]
+    block = _endphase(r.status[len(CORE) - 1])
+    assert block[0].startswith("Endphasen-Prognose bis 96.0 C (Fit ")
+    assert "Pit 110 C" in block[0]  # config default
+    pit_line = next(l for l in block if "A=Pit 110 C" in l)
+    foil_line = next(l for l in block if "A=100 C" in l)
+
+    def _clock(line: str) -> str:
+        return line.rsplit("~", 1)[1][:5]
+
+    # A = pit is the earliest exponential arrival, after the linear lower bound
+    linear = next(l for l in r.status[len(CORE) - 1].splitlines() if l.startswith("Watcher-Prognose"))
+    assert _clock(linear) < _clock(pit_line) < _clock(foil_line)
+    # adaptive start lands where the note found the steady end phase (~08:00),
+    # with A determined by the data
+    assert "Fit 07:53-" in block[0]
+    assert any("A frei 98.5±1.8 C" in l for l in block)
+    # samples since the earliest fit start survive the normal 2 h retention
+    assert r.state.wrapped_at is not None
+    assert r.state.internal_samples[0][0] <= r.state.wrapped_at + 60 * 60 + 600
+
+
+def test_set_pit_changes_endphase_forecast() -> None:
+    base = Replay()
+    base.run(len(CORE), commands={36: ["wrapped"]})
+    hot = Replay()
+    hot.run(len(CORE), commands={36: ["wrapped", "set pit 130"]})
+    block = _endphase(hot.status[len(CORE) - 1])
+    assert "Pit 130 C" in block[0]
+    assert any("A=Pit 130 C" in l for l in block)
+    assert block != _endphase(base.status[len(CORE) - 1])

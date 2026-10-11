@@ -40,6 +40,10 @@ Example:
     Delete the Kubernetes resources for a finished cook::
 
         $ wachtmeater deploy --meater-url https://app.meater.com/cooks/abc123 --delete
+
+    End-phase ETA (exponential fit) from a Wachtmeater Element chat export::
+
+        $ wachtmeater eta "Element - Wachtmeater ... Chat Export ....zip" --pit 110 --target 96.5 --since 08:00
 """
 
 import argparse
@@ -57,7 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     Returns:
         An ``argparse.ArgumentParser`` with sub-commands for ``watcher``,
-        ``monitor``, ``call``, ``send-matrix``, and ``deploy``.
+        ``monitor``, ``call``, ``send-matrix``, ``deploy``, ``operator`` and
+        ``eta``.
     """
     parser = argparse.ArgumentParser(
         prog="wachtmeater",
@@ -101,6 +106,23 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "operator",
         help="Run the long-running operator that spawns watcher jobs from Matrix commands",
+    )
+
+    # eta (end-phase core temperature forecast)
+    sp_e = sub.add_parser("eta", help="End-phase ETA to the target core temp from a Wachtmeater chat export")
+    sp_e.add_argument("export", help="Element chat export (ZIP or export.json)")
+    sp_e.add_argument(
+        "--pit",
+        type=float,
+        default=None,
+        help="Real smoker temperature in C (upper bound for A; default: config pit_temp)",
+    )
+    sp_e.add_argument("--target", type=float, default=96.5, help="Target core temperature in C")
+    sp_e.add_argument("--since", default=None, help="Fit only from HH:MM on (end phase, after the wrap)")
+    sp_e.add_argument(
+        "--auto",
+        action="store_true",
+        help="Search the steady end-phase start adaptively (from --since or the first reading on)",
     )
 
     return parser
@@ -197,6 +219,27 @@ def main() -> None:
         from wachtmeater.operator import main as op_main
 
         op_main()
+
+    elif args.command == "eta":
+        from wachtmeater import cfg
+        from wachtmeater.core_forecast import find_endphase_start, format_report, forecast, select_since
+        from wachtmeater.element_export import readings_from_element_export
+
+        readings = readings_from_element_export(args.export)
+        if args.since:
+            readings = select_since(readings, args.since)
+        pit = args.pit if args.pit is not None else cfg.monitoring.pit_temp
+        if args.auto:
+            start = find_endphase_start(readings, args.target, pit)
+            if start is None:
+                logger.error("Kein stabiler Endphasen-Fit gefunden (Anstieg noch nicht gleichmaessig).")
+                sys.exit(1)
+            readings = [r for r in readings if r[0] >= start]
+        try:
+            print(format_report(forecast(readings, target=args.target, pit=pit)))
+        except ValueError as exc:
+            logger.error(f"ETA-Prognose nicht moeglich: {exc}")
+            sys.exit(1)
 
 
 def operator_main() -> None:
