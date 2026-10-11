@@ -73,64 +73,66 @@ When things go sideways (or the cook finishes), a SIP phone call is triggered au
 
 Send these in the Matrix room the bot has joined (case-insensitive):
 
-| Command | Description |
-|---|---|
-| `status` | Fetch and post current MEATER status |
-| `enable tempdown` | Enable ambient temp drop alert (fire out detection). The ambient high-water mark is only tracked once the core reaches `TEMPDOWN_WARMUP_CORE_TEMP` (40 °C), so warm-up overshoots do not count |
-| `disable tempdown` | Disable ambient temp drop alert |
-| `enable ruhephase <temp>` | Enable rest/cooldown alert at target temp (C). Automatically disables `tempdown` — the cooldown is intended here and would otherwise trigger a false "fire is out" alarm. Re-arm with `enable tempdown` afterwards |
-| `disable ruhephase` | Disable rest/cooldown alert (does *not* restore `tempdown`) |
-| `enable stall [<rate>]` | Enable stall detection (optional: threshold in °C/h, default 4). Fires when the core rises slower than that over `STALL_WINDOW_MINUTES` inside `STALL_CORE_MIN`–`STALL_CORE_MAX`; falling temps and disturbances (lid open, probe re-seated) never count as a stall, and after the wrap it no longer asks to wrap |
-| `disable stall` | Disable stall detection |
-| `enable wrap <temp>` | Enable wrap reminder at internal temp (C) |
-| `disable wrap` | Disable wrap reminder |
-| `enable pull <temp>` | Take-out alert (Matrix message **and** SIP call) when the core temp reaches `<temp>` C; overrides the MEATER target for the target-reached alert. Aliases: `rausnehmen <temp>`, `set pull <temp>` |
-| `disable pull` | Disable the take-out override (MEATER target governs again) |
-| `enable ambient <min> <max>` | Enable ambient range alert (min/max C) |
-| `disable ambient` | Disable ambient range alert |
-| `enable cookend` | Enable cook-end detection (auto-stop) |
-| `disable cookend` | Disable cook-end detection |
-| `enable offline` | Enable station-offline alert (SIP phone call on prolonged station outage) |
-| `disable offline` | Disable station-offline alert |
-| `enable startcall` | Enable the startup test call (applied on the next watcher start) |
-| `disable startcall` | Disable the startup test call |
-| `set interval <secs>` | Override the periodic check interval (seconds); applies from the next cycle, persists per cook (min 30 s) |
-| `reset interval` | Restore the config-default check interval |
-| `reset stall` | Reset stall alert (re-arms after it fired) |
-| `reset wrap` | Reset wrap alert (re-arms after it fired) |
-| `reset ambient` | Clear the tracked ambient high-water mark (`Max Ambient`). The next check re-seeds it from the current reading, so `tempdown` measures its drop from there. Use after deliberately turning the fire down. Aliases: `reset maxambient`, `reset max ambient`, `ambient reset` |
-| `pause [<min>]` | Lid open / wrapping: mute `tempdown`, stall and ambient range for `<min>` minutes (default `PAUSE_DEFAULT_MINUTES`); the ambient high-water mark is reset when the pause ends. Pull, offline and cook-end alerts stay active. Shown with remaining time in the status |
-| `wrapped [<min>]` | Like `pause`, marks the wrap as done and starts the end-phase forecast: the watcher fits `T(t) = A - (A - T0)·e^(-c·t)` to its own core readings. The fit start is searched adaptively (earliest window from `ENDPHASE_SETTLE_MINUTES` after the wrap whose free fit has RMS ≤ `ENDPHASE_STABLE_RMS` and an `A` clearly determined by the data); until then a preliminary `A` = pit estimate is shown. Then it shows ETAs for `A` = pit (earliest), `A` = 100 °C (foil, boiling juice) and a free `A` |
-| `set pit <temp>` | Real smoker temperature (°C) — upper bound for `A` in the end-phase forecast (the MEATER ambient reads low, it is cooled by the meat). Default `PIT_TEMP` |
-| `reset pit` | Back to `PIT_TEMP` |
-| `resume` | End a pause early |
-| `testcall [<text>]` | Trigger a SIP phone call to the pitmaster with optional spoken text (default: `Wachtmeater Testanruf`). The text keeps its original case so TTS pronounces names correctly. |
-| `hilfe` / `help` / `?` | Show available commands |
-| `stop` / `quit` / `beenden` / `exit` | Shut down the watcher loop |
+| Command                              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+|--------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `status`                             | Fetch and post current MEATER status                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `eta` / `restzeit` / `prognose`      | Run a fresh check but post only the remaining-time lines (MEATER estimate, watcher trend forecast, end-phase forecast) without screenshot                                                                                                                                                                                                                                                                                                                                                             |
+| `enable tempdown`                    | Enable ambient temp drop alert (fire out detection). The ambient high-water mark is only tracked once the core reaches `TEMPDOWN_WARMUP_CORE_TEMP` (40 °C), so warm-up overshoots do not count                                                                                                                                                                                                                                                                                                        |
+| `disable tempdown`                   | Disable ambient temp drop alert                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `enable ruhephase <temp>`            | Enable rest/cooldown alert at target temp (C). Automatically disables `tempdown` — the cooldown is intended here and would otherwise trigger a false "fire is out" alarm. Re-arm with `enable tempdown` afterwards                                                                                                                                                                                                                                                                                    |
+| `disable ruhephase`                  | Disable rest/cooldown alert (does *not* restore `tempdown`)                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `enable stall [<rate>]`              | Enable stall detection (optional: threshold in °C/h, default 4). Fires when the core rises slower than that over `STALL_WINDOW_MINUTES` inside `STALL_CORE_MIN`–`STALL_CORE_MAX`; falling temps and disturbances (lid open, probe re-seated) never count as a stall, and after the wrap it no longer asks to wrap                                                                                                                                                                                     |
+| `disable stall`                      | Disable stall detection                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `enable wrap <temp>`                 | Enable wrap reminder at internal temp (C)                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `disable wrap`                       | Disable wrap reminder                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `enable pull <temp>`                 | Take-out alert (Matrix message **and** SIP call) when the core temp reaches `<temp>` C; overrides the MEATER target for the target-reached alert. Aliases: `rausnehmen <temp>`, `set pull <temp>`                                                                                                                                                                                                                                                                                                     |
+| `disable pull`                       | Disable the take-out override (MEATER target governs again)                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `enable ambient <min> <max>`         | Enable ambient range alert (min/max C)                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `disable ambient`                    | Disable ambient range alert                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `enable cookend`                     | Enable cook-end detection (auto-stop)                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `disable cookend`                    | Disable cook-end detection                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `enable offline`                     | Enable station-offline alert (SIP phone call on prolonged station outage)                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `disable offline`                    | Disable station-offline alert                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `enable startcall`                   | Enable the startup test call (applied on the next watcher start)                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `disable startcall`                  | Disable the startup test call                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `set interval <secs>`                | Override the periodic check interval (seconds); applies from the next cycle, persists per cook (min 30 s)                                                                                                                                                                                                                                                                                                                                                                                             |
+| `reset interval`                     | Restore the config-default check interval                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `reset stall`                        | Reset stall alert (re-arms after it fired)                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `reset wrap`                         | Reset wrap alert (re-arms after it fired)                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `reset ambient`                      | Clear the tracked ambient high-water mark (`Max Ambient`). The next check re-seeds it from the current reading, so `tempdown` measures its drop from there. Use after deliberately turning the fire down. Aliases: `reset maxambient`, `reset max ambient`, `ambient reset`                                                                                                                                                                                                                           |
+| `pause [<min>]`                      | Lid open / wrapping: mute `tempdown`, stall and ambient range for `<min>` minutes (default `PAUSE_DEFAULT_MINUTES`); the ambient high-water mark is reset when the pause ends. Pull, offline and cook-end alerts stay active. Shown with remaining time in the status                                                                                                                                                                                                                                 |
+| `wrapped [<min>]`                    | Marks the wrap as done and starts the end-phase forecast (with `<min>` it also pauses like `pause`): the watcher fits `T(t) = A - (A - T0)·e^(-c·t)` to its own core readings. The fit start is searched adaptively (earliest window from `ENDPHASE_SETTLE_MINUTES` after the wrap whose free fit has RMS ≤ `ENDPHASE_STABLE_RMS` and an `A` clearly determined by the data); until then a preliminary `A` = pit estimate is shown. Then it shows ETAs for `A` = pit (earliest), `A` = 100 °C (foil, boiling juice) and a free `A` |
+| `set pit <temp>`                     | Real smoker temperature (°C) — upper bound for `A` in the end-phase forecast (the MEATER ambient reads low, it is cooled by the meat). Default `PIT_TEMP`                                                                                                                                                                                                                                                                                                                                             |
+| `reset pit`                          | Back to `PIT_TEMP`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `resume`                             | End a pause early                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `testcall [<text>]`                  | Trigger a SIP phone call to the pitmaster with optional spoken text (default: `Wachtmeater Testanruf`). The text keeps its original case so TTS pronounces names correctly.                                                                                                                                                                                                                                                                                                                           |
+| `hilfe` / `help` / `?` / `/help`     | Show available commands                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `stop` / `quit` / `beenden` / `exit` | Shut down the watcher loop                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Operator Commands
 
 Operator commands are recognised only in the room configured as `MATRIX_OPERATOR_LISTENING_ROOM`, and only when the sender's MXID matches `MATRIX_PITMASTER`. Any other sender is silently ignored.
 
-| Command | Description |
-|---|---|
-| `operator new <MEATER_URL>` | Spawn a new watcher Job for the given cook URL. Calls `create_resources()` end-to-end (namespace + Secret + Job). |
-| `operator delete <spec>` | Delete a watcher. `<spec>` may be a full MEATER URL, the cook UUID, the 8-char short suffix, or the 1-based index from the most recent `operator list` reply. |
-| `operator resume <spec>` | Recreate a watcher whose cook was already ended, with cook-end detection disabled so it keeps monitoring. Same `<spec>` forms as `operator delete`. |
-| `operator list` | List active `meater-watcher-*` Jobs in the namespace with status (`Active`/`Succeeded`/`Failed`/`Pending`) and cook URL. The shown indices feed `operator delete <N>`. |
-| `operator status` | Operator's own health summary: uptime, K8s API reachability, watcher count, listening room. |
-| `operator help` / `hilfe` | Show available operator commands |
+| Command                     | Description                                                                                                                                                                                                                                                                                                                                                        |
+|-----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `operator new <MEATER_URL>` | Spawn a new watcher Job for the given cook URL. Calls `create_resources()` end-to-end (namespace + Secret + Job).                                                                                                                                                                                                                                                  |
+| `operator delete <spec>`    | Delete a watcher. `<spec>` may be a full MEATER URL, the cook UUID, the 8-char short suffix, or the 1-based index from the most recent `operator list` reply.                                                                                                                                                                                                      |
+| `operator resume <spec>`    | Recreate a watcher whose cook was already ended, with cook-end detection disabled so it keeps monitoring. Same `<spec>` forms as `operator delete`.                                                                                                                                                                                                                |
+| `operator restart <spec>`   | Recreate a watcher Job (delete + create), e.g. to pick up a newly deployed image. The cook continues from its persisted state with all settings unchanged. Same `<spec>` forms as `operator delete`. Note: deleting a watcher pod directly does not work for this — the gracefully stopped pod counts as a successful completion and the Job is marked `Complete`. |
+| `operator list`             | List active `meater-watcher-*` Jobs in the namespace with status (`Active`/`Succeeded`/`Failed`/`Pending`) and cook URL. The shown indices feed `operator delete <N>`.                                                                                                                                                                                             |
+| `operator status`           | Operator's own health summary: uptime, K8s API reachability, watcher count, listening room.                                                                                                                                                                                                                                                                        |
+| `operator help` / `hilfe`   | Show available operator commands                                                                                                                                                                                                                                                                                                                                   |
 
 ## Cook-End Detection
 
 When `cookend` is enabled, the watcher uses four independent mechanisms to detect that a cook has finished:
 
-| # | Mechanism | Trigger | Default threshold |
-|---|---|---|---|
-| A | **Consecutive fetch errors** | Fetch fails N times in a row | `COOKEND_ERROR_THRESHOLD` = 3 |
-| B | **Probe removed** | Internal temp drops below threshold after having been above 50 °C | `COOKEND_PROBE_REMOVED_TEMP` = 35.0 °C |
-| C | **Status "done"** | MEATER reports internal temp ≥ target | — |
-| D | **MEATER Cloud "finished"** | Cook is reported finished (`cookSummary.isFinished`, or the `#cook.finished` CSS class when scraping) | — |
+| # | Mechanism                    | Trigger                                                                                               | Default threshold                      |
+|---|------------------------------|-------------------------------------------------------------------------------------------------------|----------------------------------------|
+| A | **Consecutive fetch errors** | Fetch fails N times in a row                                                                          | `COOKEND_ERROR_THRESHOLD` = 3          |
+| B | **Probe removed**            | Internal temp drops below threshold after having been above 50 °C                                     | `COOKEND_PROBE_REMOVED_TEMP` = 35.0 °C |
+| C | **Status "done"**            | MEATER reports internal temp ≥ target                                                                 | —                                      |
+| D | **MEATER Cloud "finished"**  | Cook is reported finished (`cookSummary.isFinished`, or the `#cook.finished` CSS class when scraping) | —                                      |
 
 Mechanisms A, B, and D post a Matrix message and trigger a SIP phone call. Mechanism C sets cook-ended state silently (the watcher loop posts a generic shutdown message). The watcher loop stops automatically once any mechanism fires.
 
@@ -140,11 +142,11 @@ A genuine HTTP 404/410 on the cook URL is treated as authoritative "cook is gone
 
 The cook page renders temperatures already rounded to whole degrees (`.internal-value` literally contains `95°`), so no amount of DOM parsing can recover decimals. The WebSocket feeding that page carries the underlying fixed-point integers instead, which is why `meater_cloud` is the preferred path:
 
-| Field | Raw | ÷ 32 | Page shows |
-|---|---|---|---|
-| `internal` | 3044 | **95.125 °C** | `95°` |
-| `ambient` | 3562 | **111.3125 °C** | `111°` |
-| `target` | 3136 | **98.0 °C** | `98°` |
+| Field      | Raw  | ÷ 32            | Page shows |
+|------------|------|-----------------|------------|
+| `internal` | 3044 | **95.125 °C**   | `95°`      |
+| `ambient`  | 3562 | **111.3125 °C** | `111°`     |
+| `target`   | 3136 | **98.0 °C**     | `98°`      |
 
 The divisor is the share page's own `DEFAULT_DENOMINATOR = 32` (`TemperatureToCelsius(t) = t / 32`), giving 1/32 °C = 0.03125 °C resolution. The connection token sits in the share page HTML (`window.MEATER.config`), so a plain HTTP GET is enough — no Playwright, no CDP.
 
@@ -171,71 +173,71 @@ cp wachtmeater.toml.example wachtmeater.local.toml
 
 `wachtmeater.local.toml` is **git-ignored** (`*.local.*`) and never committed — keep your real credentials there. It is picked up automatically: `read_dot_env_to_environ()` searches (package dir, then CWD) for `wachtmeater.toml` → `.env` → `.local.env` → `wachtmeater.local.toml`. To use a different path explicitly, set `CONFIG=/path/to/your.toml` (e.g. `CONFIG=wachtmeater.local.toml python -m pytest`). In the container/K8s the config instead comes from the generated Secret mounted at `/config/wachtmeater.toml`.
 
-| Variable | Description | Default |
-|---|---|---|
-| `MEATER_URL` | MEATER Cloud cook URL to monitor | — (**required**) |
-| `BROWSER_CDP_URL` | CDP endpoint for headless Chrome | `http://chrome-kasmvnc.kasmvnc.svc.cluster.local:9222` |
-| `SCREENSHOT_DIR` | Directory for cook page screenshots | `/data` |
-| `SCREENSHOT_ENABLED` | Capture a cook-page screenshot. Set `false` to run fully browserless (no CDP needed on the happy path) | `true` |
-| `CLOUD_WS_ENABLED` | Prefer the MEATER Cloud WebSocket over page scraping | `true` |
-| `CLOUD_WS_TIMEOUT` | Seconds to wait for the share page and the first cook frame | `20.0` |
-| `STATE_FILE_DIR` | Directory for the JSON state file | `/data` |
-| `STATE_FILE_NAME` | State file name (auto-generated from cook UUID when empty) | `""` |
-| `CHECK_INTERVAL` | Seconds between periodic checks | `600` |
-| `STALL_WINDOW_MINUTES` | Time window for the stall rise rate (independent of the check interval) | `30` |
-| `STALL_CORE_MIN` / `STALL_CORE_MAX` | Core range (°C) in which stall detection runs | `60.0` / `82.0` |
-| `STALL_DISTURBANCE_AMBIENT_DROP` | Ambient drop (°C, vs. previous reading or moving average) that marks a disturbance | `15.0` |
-| `STALL_DISTURBANCE_CORE_DROP` | Core drop (°C vs. previous reading) that marks a disturbance | `1.0` |
-| `STALL_DISTURBANCE_PAUSE_CHECKS` | Checks stall detection sits out after a disturbance | `2` |
-| `PAUSE_DEFAULT_MINUTES` | Default duration of `pause` / `wrapped` | `20` |
-| `FORECAST_WINDOW_MINUTES` | Window for the watcher's own linear ETA forecast to the pull target | `60` |
-| `PIT_TEMP` | Real smoker temperature (°C) for the end-phase forecast, overridable per cook via `set pit` | `110.0` |
-| `TEMPDOWN_WARMUP_CORE_TEMP` | Core temperature (°C) from which the ambient high-water mark for `tempdown` is tracked — warm-up overshoots below it are ignored. `0` = track from the first reading | `40.0` |
-| `ENDPHASE_SETTLE_MINUTES` | Earliest end-phase fit start after `wrapped` (lower bound; the actual start is searched adaptively) | `60` |
-| `ENDPHASE_SEARCH_STEP_MINUTES` | Step between candidate fit starts in the adaptive search | `10` |
-| `ENDPHASE_STABLE_RMS` | Free-fit RMS (°C) up to which a window counts as steady end phase | `0.1` |
-| `ENDPHASE_MIN_MINUTES` | Minimum end-phase data before the exponential forecast is shown | `60` |
-| `AMBIENT_TEMP_DROP_THRESHOLD` | Ambient temp drop (°C) to trigger fire-out alert | `10` |
-| `COOKEND_ERROR_THRESHOLD` | Consecutive fetch errors before declaring cook ended | `3` |
-| `COOKEND_PROBE_REMOVED_TEMP` | Internal temp (°C) below which probe counts as removed | `35.0` |
-| `STATION_OFFLINE_CALL_THRESHOLD` | Consecutive offline checks before the station-offline SIP call fires | `2` |
-| `MATRIX_HOMESERVER` | Matrix homeserver URL | `http://synapse.matrix.svc.cluster.local:8008` |
-| `MATRIX_USER` | Matrix bot user ID | — (**required**) |
-| `MATRIX_PASSWORD` | Matrix bot password | — (**required**) |
-| `MATRIX_ROOM` | Default room ID or alias to join | `!exampleroom:matrix.example.com` |
-| `MATRIX_AUTO_CREATE_ROOM` | Auto-create an E2E-encrypted Matrix room per cook UUID | `false` |
-| `MATRIX_UPDATES_TO_BROADCAST_ROOM` | Whether cook updates also go to `MATRIX_ROOM` when a per-cook room exists (`false` = per-cook room only) | `true` |
-| `MATRIX_PITMASTER` | Matrix user ID to invite into auto-created rooms; also the only MXID allowed to issue `operator …` commands | `""` |
-| `MATRIX_PITMASTER_ADMIN` | Grant the pitmaster admin (power level 100) in the auto-created per-cook room. Applies only to rooms the bot creates itself — existing rooms are never modified | `true` |
-| `MATRIX_OPERATOR_LISTENING_ROOM` | Room (`!id:srv` *or* `#alias:srv`) the operator listens in for `operator …` commands | `""` |
-| `CRYPTO_STORE_PATH` | Path for E2E encryption crypto store | `/data/crypto_store` |
-| `OPERATOR_CRYPTO_STORE_PATH` | Separate crypto store for the operator pod (avoids SQLite races with watcher pods sharing the same MXID) | `/data/operator_crypto_store` |
-| `AUTH_METHOD` | Auth method (`password` or `jwt`) | `password` |
-| `KEYCLOAK_URL` | Keycloak base URL (required if `jwt`) | — |
-| `KEYCLOAK_REALM` | Keycloak realm name | — |
-| `KEYCLOAK_CLIENT_ID` | Keycloak client ID | — |
-| `KEYCLOAK_CLIENT_SECRET` | Keycloak client secret | `""` |
-| `JWT_LOGIN_TYPE` | Matrix login type for JWT | `com.famedly.login.token.oauth` |
-| `SOPERATORURL` | sipstuff-operator call endpoint | `http://sipstuff-operator.sipstuff.svc.cluster.local/call` |
+| Variable                            | Description                                                                                                                                                          | Default                                                    |
+|-------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------|
+| `MEATER_URL`                        | MEATER Cloud cook URL to monitor                                                                                                                                     | — (**required**)                                           |
+| `BROWSER_CDP_URL`                   | CDP endpoint for headless Chrome                                                                                                                                     | `http://chrome-kasmvnc.kasmvnc.svc.cluster.local:9222`     |
+| `SCREENSHOT_DIR`                    | Directory for cook page screenshots                                                                                                                                  | `/data`                                                    |
+| `SCREENSHOT_ENABLED`                | Capture a cook-page screenshot. Set `false` to run fully browserless (no CDP needed on the happy path)                                                               | `true`                                                     |
+| `CLOUD_WS_ENABLED`                  | Prefer the MEATER Cloud WebSocket over page scraping                                                                                                                 | `true`                                                     |
+| `CLOUD_WS_TIMEOUT`                  | Seconds to wait for the share page and the first cook frame                                                                                                          | `20.0`                                                     |
+| `STATE_FILE_DIR`                    | Directory for the JSON state file                                                                                                                                    | `/data`                                                    |
+| `STATE_FILE_NAME`                   | State file name (auto-generated from cook UUID when empty)                                                                                                           | `""`                                                       |
+| `CHECK_INTERVAL`                    | Seconds between periodic checks                                                                                                                                      | `600`                                                      |
+| `STALL_WINDOW_MINUTES`              | Time window for the stall rise rate (independent of the check interval)                                                                                              | `30`                                                       |
+| `STALL_CORE_MIN` / `STALL_CORE_MAX` | Core range (°C) in which stall detection runs                                                                                                                        | `60.0` / `82.0`                                            |
+| `STALL_DISTURBANCE_AMBIENT_DROP`    | Ambient drop (°C, vs. previous reading or moving average) that marks a disturbance                                                                                   | `15.0`                                                     |
+| `STALL_DISTURBANCE_CORE_DROP`       | Core drop (°C vs. previous reading) that marks a disturbance                                                                                                         | `1.0`                                                      |
+| `STALL_DISTURBANCE_PAUSE_CHECKS`    | Checks stall detection sits out after a disturbance                                                                                                                  | `2`                                                        |
+| `PAUSE_DEFAULT_MINUTES`             | Default duration of `pause`                                                                                                                                          | `20`                                                       |
+| `FORECAST_WINDOW_MINUTES`           | Window for the watcher's own linear ETA forecast to the pull target                                                                                                  | `60`                                                       |
+| `PIT_TEMP`                          | Real smoker temperature (°C) for the end-phase forecast, overridable per cook via `set pit`                                                                          | `110.0`                                                    |
+| `TEMPDOWN_WARMUP_CORE_TEMP`         | Core temperature (°C) from which the ambient high-water mark for `tempdown` is tracked — warm-up overshoots below it are ignored. `0` = track from the first reading | `40.0`                                                     |
+| `ENDPHASE_SETTLE_MINUTES`           | Earliest end-phase fit start after `wrapped` (lower bound; the actual start is searched adaptively)                                                                  | `60`                                                       |
+| `ENDPHASE_SEARCH_STEP_MINUTES`      | Step between candidate fit starts in the adaptive search                                                                                                             | `10`                                                       |
+| `ENDPHASE_STABLE_RMS`               | Free-fit RMS (°C) up to which a window counts as steady end phase                                                                                                    | `0.1`                                                      |
+| `ENDPHASE_MIN_MINUTES`              | Minimum end-phase data before the exponential forecast is shown                                                                                                      | `60`                                                       |
+| `AMBIENT_TEMP_DROP_THRESHOLD`       | Ambient temp drop (°C) to trigger fire-out alert                                                                                                                     | `10`                                                       |
+| `COOKEND_ERROR_THRESHOLD`           | Consecutive fetch errors before declaring cook ended                                                                                                                 | `3`                                                        |
+| `COOKEND_PROBE_REMOVED_TEMP`        | Internal temp (°C) below which probe counts as removed                                                                                                               | `35.0`                                                     |
+| `STATION_OFFLINE_CALL_THRESHOLD`    | Consecutive offline checks before the station-offline SIP call fires                                                                                                 | `2`                                                        |
+| `MATRIX_HOMESERVER`                 | Matrix homeserver URL                                                                                                                                                | `http://synapse.matrix.svc.cluster.local:8008`             |
+| `MATRIX_USER`                       | Matrix bot user ID                                                                                                                                                   | — (**required**)                                           |
+| `MATRIX_PASSWORD`                   | Matrix bot password                                                                                                                                                  | — (**required**)                                           |
+| `MATRIX_ROOM`                       | Default room ID or alias to join                                                                                                                                     | `!exampleroom:matrix.example.com`                          |
+| `MATRIX_AUTO_CREATE_ROOM`           | Auto-create an E2E-encrypted Matrix room per cook UUID                                                                                                               | `false`                                                    |
+| `MATRIX_UPDATES_TO_BROADCAST_ROOM`  | Whether cook updates also go to `MATRIX_ROOM` when a per-cook room exists (`false` = per-cook room only)                                                             | `true`                                                     |
+| `MATRIX_PITMASTER`                  | Matrix user ID to invite into auto-created rooms; also the only MXID allowed to issue `operator …` commands                                                          | `""`                                                       |
+| `MATRIX_PITMASTER_ADMIN`            | Grant the pitmaster admin (power level 100) in the auto-created per-cook room. Applies only to rooms the bot creates itself — existing rooms are never modified      | `true`                                                     |
+| `MATRIX_OPERATOR_LISTENING_ROOM`    | Room (`!id:srv` *or* `#alias:srv`) the operator listens in for `operator …` commands                                                                                 | `""`                                                       |
+| `CRYPTO_STORE_PATH`                 | Path for E2E encryption crypto store                                                                                                                                 | `/data/crypto_store`                                       |
+| `OPERATOR_CRYPTO_STORE_PATH`        | Separate crypto store for the operator pod (avoids SQLite races with watcher pods sharing the same MXID)                                                             | `/data/operator_crypto_store`                              |
+| `AUTH_METHOD`                       | Auth method (`password` or `jwt`)                                                                                                                                    | `password`                                                 |
+| `KEYCLOAK_URL`                      | Keycloak base URL (required if `jwt`)                                                                                                                                | —                                                          |
+| `KEYCLOAK_REALM`                    | Keycloak realm name                                                                                                                                                  | —                                                          |
+| `KEYCLOAK_CLIENT_ID`                | Keycloak client ID                                                                                                                                                   | —                                                          |
+| `KEYCLOAK_CLIENT_SECRET`            | Keycloak client secret                                                                                                                                               | `""`                                                       |
+| `JWT_LOGIN_TYPE`                    | Matrix login type for JWT                                                                                                                                            | `com.famedly.login.token.oauth`                            |
+| `SOPERATORURL`                      | sipstuff-operator call endpoint                                                                                                                                      | `http://sipstuff-operator.sipstuff.svc.cluster.local/call` |
 
 ### Alert defaults (first run only)
 
 These set the initial values written into a fresh per-cook state file. Once the watcher has saved state, runtime `enable …` / `disable …` Matrix commands take precedence — changes to these env vars are ignored on subsequent runs unless the state file is removed. The operator propagates all of these into spawned watcher TOMLs so each new cook starts with the operator's preferred profile.
 
-| Variable | Description | Default |
-|---|---|---|
-| `ALERT_DEFAULT_TEMPDOWN_ENABLED` | Ambient temp drop alert (fire-out detection) | `true` |
-| `ALERT_DEFAULT_RUHEPHASE_ENABLED` | Rest/cooldown alert | `false` |
-| `ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP` | Target cooldown temp (°C) | `0.0` |
-| `ALERT_DEFAULT_STALL_ENABLED` | Stall detection | `false` |
-| `ALERT_DEFAULT_STALL_MAX_RATE` | Stall threshold: core rise rate (°C/h) below which a stall is reported (replaces `ALERT_DEFAULT_STALL_MIN_DELTA`) | `4.0` |
-| `ALERT_DEFAULT_WRAP_ENABLED` | One-shot wrap reminder | `false` |
-| `ALERT_DEFAULT_WRAP_TARGET_TEMP` | Internal temp (°C) at which to remind about wrapping | `0.0` |
-| `ALERT_DEFAULT_AMBIENT_RANGE_ENABLED` | Smoker too hot / too cold alert | `false` |
-| `ALERT_DEFAULT_AMBIENT_RANGE_MIN` | Min acceptable ambient temp (°C) | `0.0` |
-| `ALERT_DEFAULT_AMBIENT_RANGE_MAX` | Max acceptable ambient temp (°C) | `0.0` |
-| `ALERT_DEFAULT_COOKEND_ENABLED` | Cook-end auto-detection | `true` |
-| `ALERT_DEFAULT_STATION_OFFLINE_ENABLED` | Station-offline alert (SIP call on prolonged outage) | `true` |
+| Variable                                | Description                                                                                                       | Default |
+|-----------------------------------------|-------------------------------------------------------------------------------------------------------------------|---------|
+| `ALERT_DEFAULT_TEMPDOWN_ENABLED`        | Ambient temp drop alert (fire-out detection)                                                                      | `true`  |
+| `ALERT_DEFAULT_RUHEPHASE_ENABLED`       | Rest/cooldown alert                                                                                               | `false` |
+| `ALERT_DEFAULT_RUHEPHASE_TARGET_TEMP`   | Target cooldown temp (°C)                                                                                         | `0.0`   |
+| `ALERT_DEFAULT_STALL_ENABLED`           | Stall detection                                                                                                   | `false` |
+| `ALERT_DEFAULT_STALL_MAX_RATE`          | Stall threshold: core rise rate (°C/h) below which a stall is reported (replaces `ALERT_DEFAULT_STALL_MIN_DELTA`) | `4.0`   |
+| `ALERT_DEFAULT_WRAP_ENABLED`            | One-shot wrap reminder                                                                                            | `false` |
+| `ALERT_DEFAULT_WRAP_TARGET_TEMP`        | Internal temp (°C) at which to remind about wrapping                                                              | `0.0`   |
+| `ALERT_DEFAULT_AMBIENT_RANGE_ENABLED`   | Smoker too hot / too cold alert                                                                                   | `false` |
+| `ALERT_DEFAULT_AMBIENT_RANGE_MIN`       | Min acceptable ambient temp (°C)                                                                                  | `0.0`   |
+| `ALERT_DEFAULT_AMBIENT_RANGE_MAX`       | Max acceptable ambient temp (°C)                                                                                  | `0.0`   |
+| `ALERT_DEFAULT_COOKEND_ENABLED`         | Cook-end auto-detection                                                                                           | `true`  |
+| `ALERT_DEFAULT_STATION_OFFLINE_ENABLED` | Station-offline alert (SIP call on prolonged outage)                                                              | `true`  |
 
 ## Installation
 
@@ -300,13 +302,13 @@ The operator uses the same Matrix MXID as the watchers it spawns and auto-trusts
 
 Reference manifests are in [`k8s/operator/`](k8s/operator/):
 
-| File | Purpose |
-|---|---|
-| `serviceaccount.yaml` | Dedicated ServiceAccount `wachtmeater-operator` |
-| `role.yaml` / `rolebinding.yaml` | Namespaced RBAC (jobs/secrets/pods in `meater`) |
-| `deployment.yaml` | `replicas: 1`, `strategy: Recreate`, runs `wachtmeater-operator` console script |
-| `configmap.example.yaml` | Example `wachtmeater.local.toml` — copy and fill in |
-| `README.md` | Step-by-step setup |
+| File                             | Purpose                                                                         |
+|----------------------------------|---------------------------------------------------------------------------------|
+| `serviceaccount.yaml`            | Dedicated ServiceAccount `wachtmeater-operator`                                 |
+| `role.yaml` / `rolebinding.yaml` | Namespaced RBAC (jobs/secrets/pods in `meater`)                                 |
+| `deployment.yaml`                | `replicas: 1`, `strategy: Recreate`, runs `wachtmeater-operator` console script |
+| `configmap.example.yaml`         | Example `wachtmeater.local.toml` — copy and fill in                             |
+| `README.md`                      | Step-by-step setup                                                              |
 
 Quickstart:
 
@@ -325,17 +327,17 @@ The ConfigMap entry is mounted via `subPath` into the container's WORKDIR (`/app
 
 ## Development
 
-| Target | Description |
-|---|---|
-| `make install` | Create virtualenv and install all dependencies |
-| `make tests` | Run pytest |
-| `make lint` | Format code with black (line length 120) |
-| `make isort` | Sort imports with isort |
-| `make tcheck` | Static type checking with mypy (strict) |
-| `make commit-checks` | Run pre-commit hooks on all files |
-| `make prepare` | Run tests + commit-checks |
-| `make pypibuild` | Build sdist + wheel with hatch |
-| `make pypipush` | Publish to PyPI with hatch |
+| Target               | Description                                    |
+|----------------------|------------------------------------------------|
+| `make install`       | Create virtualenv and install all dependencies |
+| `make tests`         | Run pytest                                     |
+| `make lint`          | Format code with black (line length 120)       |
+| `make isort`         | Sort imports with isort                        |
+| `make tcheck`        | Static type checking with mypy (strict)        |
+| `make commit-checks` | Run pre-commit hooks on all files              |
+| `make prepare`       | Run tests + commit-checks                      |
+| `make pypibuild`     | Build sdist + wheel with hatch                 |
+| `make pypipush`      | Publish to PyPI with hatch                     |
 
 ## License
 This project is licensed under the LGPL where applicable/possible — see [LICENSE.md](LICENSE.md). Some files/parts may use other licenses: [MIT](LICENSEMIT.md) | [GPL](LICENSEGPL.md) | [LGPL](LICENSELGPL.md). Always check per‑file headers/comments.
