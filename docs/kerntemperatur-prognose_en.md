@@ -62,13 +62,15 @@ The watcher calculates **one** variant: $A$ fixed to the smoker temperature (**A
 The original note used `scipy.optimize.curve_fit`. In the watcher image, numpy and scipy would be two heavy new dependencies for one small fit. So `core_forecast` is pure Python:
 
 - **Why no closed form:** $c$ is in the exponent, so the fit is *nonlinear* least squares. You could take the logarithm ($\ln(A - T)$ against $t$) and fit a straight line. But that weights the residuals differently, because errors near $A$ get blown up. It then gives a different $c$ than `curve_fit`.
-- **Fixed $A$:** One parameter is left, $c$, in a known range. A one-dimensional **golden-section search** on the sum of squared errors $SSE(c)$ finds it. It needs neither derivatives nor a start value, stays within the bounds and is guaranteed to converge. Each step shrinks the interval by a factor of 0.618.
+- **$T_0$ is fitted too**, as in the standard asymptotic regression model (R: `SSasymp`), instead of being anchored at the first reading. Otherwise one noisy first reading shifts the whole curve: −1 °C in the first reading moved the ETA on 11 Oct by 56 minutes (A = pit) or 82 minutes (A = 100 °C); with a fitted $T_0$ it is 19 or 29 minutes. For given $A$ and $c$ the model is linear in $T_0$, so the best $T_0$ has a closed form and costs no extra search.
+- **Fixed $A$:** One searched parameter is left, $c$, in a known range. A one-dimensional **golden-section search** on the sum of squared errors $SSE(c)$ finds it. It needs neither derivatives nor a start value, stays within the bounds and is guaranteed to converge. Each step shrinks the interval by a factor of 0.618.
 - **Free $A$:** For each candidate $A$ the best $c$ is determined (the "profile"). The profile is then minimised over $A \in [T_Z + 0.1;\ \text{pit}]$, again by golden section. The bounds are thus built in, and the optimum is the same as `curve_fit` with `bounds`.
-- **Uncertainty of $A$** (the "±1.8"): It comes from the Jacobian. For each reading it holds how strongly the model value reacts to a small change of $A$ or $c$:
+- **Uncertainty of $A$** (the "±3.9"): It comes from the Jacobian. For each reading it holds how strongly the model value reacts to a small change of $A$, $T_0$ or $c$:
   - $\partial T/\partial A = 1 - e^{-ct}$: 0 at the start of the window, almost 1 at the end. So mainly the late readings carry information about $A$.
+  - $\partial T/\partial T_0 = e^{-ct}$: shifts the start of the curve and fades out over time.
   - $\partial T/\partial c = (A - T_0)\,t\,e^{-ct}$: largest in the middle of the curve.
 
-  These derivatives give $\text{cov} = s^2 (J^\top J)^{-1}$ with $s^2 = SSE/(n-2)$, the same formula `curve_fit` uses. The uncertainty gets large when $A$ and $c$ can stand in for each other: a higher $A$ with a smaller $c$ gives almost the same curve.
+  These derivatives give $\text{cov} = s^2 (J^\top J)^{-1}$ with $s^2 = SSE/(n-3)$, the same formula `curve_fit` uses. The uncertainty gets large when the parameters can stand in for each other: a higher $A$ with a smaller $c$ gives almost the same curve. With $T_0$ as a third parameter, $A$ is less certain than with an anchored $T_0$ (±3.9 instead of ±1.8 °C on 11 Oct); the stability threshold is accordingly 5 °C instead of 3 °C.
 - **Runtime:** about 0.2 s for 120 points and 0.03 s for 15 points. The watcher thins its samples to at most 120 points.
 
 The docstrings in `core_forecast.py` explain every calculation step in detail.
@@ -77,7 +79,7 @@ The docstrings in `core_forecast.py` explain every calculation step in detail.
 
 According to the original note, **only the end phase** may be fitted, i.e. after the stall and the wrap. The watcher starts the fit at a **fixed time**: `endphase_settle_minutes` (default 60) after `wrapped`.
 
-- The curve is **anchored** at the core reading at the fit start ($T_0$ = first reading of the window). Only $c$ is fitted (`core_forecast.fit_fixed_ambient`), with $A$ = pit.
+- $c$ and the start value $T_0$ are fitted (`core_forecast.fit_fixed_ambient`), with $A$ = pit.
 - The ETA is computed from the **current** reading: $\Delta t = \ln\frac{A - T_{now}}{A - T_Z}/c$.
 - The first forecast appears once the window holds at least `endphase_min_minutes` (60) of data.
 - **Disturbances or pauses** (`trend_ignore_before`) do not move the fit start. They only affect the linear trend and the stall rate. `trend ab HH:MM` restarts their evaluation on demand.
@@ -111,7 +113,7 @@ Endphasen-Prognose: sammelt Daten (Fit ab 06:24, erste Prognose fruehestens ~07:
 Enough data:
 
 ```
-Endphasen-Prognose bis 96.0 C (A=Pit 110 C, Fit 06:33-10:13, 23 Punkte, RMS 0.51 C): ~13:17
+Endphasen-Prognose bis 96.0 C (A=Pit 110 C, Fit 06:33-10:13, 23 Punkte, RMS 0.33 C): ~13:38
 ```
 
 Edge cases: `...: nie (Pit <= Ziel)` and `...: nicht absehbar (Kern steigt kaum)` (ETA > 24 h).
@@ -140,16 +142,16 @@ wachtmeater eta "….zip" --since 06:30 --auto
 wachtmeater eta "Element - Wachtmeater e62a2cc9 - ….zip" --since 05:46 --until 07:52 --auto --target 97 --pit 120
 ```
 
-Output for the 11 Oct 2026 cook. It is identical to the scipy output in the original note:
+Output for the 11 Oct 2026 cook. It is identical to `scipy.optimize.curve_fit` with $A$, $T_0$ and $c$ free. The original note anchored $T_0$ at the first reading and therefore got slightly different values (e.g. free A = 98.5 ± 1.8 °C → 18:26):
 
 ```
 Fit 08:01–10:25 (15 Punkte): Kern 84.9→89.8 °C, MEATER-Ambient Ø 103.8 °C, Pit 110 °C, Ziel 96.5 °C
 linear      : 1.99 °C/h  -> 13:45  (früheste Ankunft)
-A=110.0 °C : c=0.092/h rms=0.091 -> 14:49  <- A = Pit (schnellste Exp.-Variante)
-A=104.0 °C : c=0.124/h rms=0.078 -> 15:34
-A=102.0 °C : c=0.141/h rms=0.073 -> 16:05
-A=100.0 °C : c=0.162/h rms=0.069 -> 17:01
-A frei (≤Pit): A=98.5±1.8 °C c=0.183/h -> 18:26
+A=110.0 °C : c=0.088/h rms=0.061 -> 14:59  <- A = Pit (schnellste Exp.-Variante)
+A=104.0 °C : c=0.121/h rms=0.058 -> 15:43
+A=102.0 °C : c=0.137/h rms=0.058 -> 16:14
+A=100.0 °C : c=0.159/h rms=0.059 -> 17:09
+A frei (≤Pit): A=102.5±3.9 °C c=0.133/h -> 16:05
 ```
 
 **Reading the output** (it is in German):
@@ -161,9 +163,9 @@ A frei (≤Pit): A=98.5±1.8 °C c=0.183/h -> 18:26
 | `MEATER-Ambient Ø`                      | mean MEATER ambient — for information only, not a valid $A$                                                                    |
 | `Ziel`                                  | target core temperature                                                                                                        |
 | `linear … (früheste Ankunft)`           | linear trend, the earliest arrival                                                                                             |
-| `A=… : c=…/h rms=… -> 14:49`            | exponential fit with fixed $A$: rate constant $c$, RMS of the residuals in °C, ETA (wall-clock time of the last reading's day) |
+| `A=… : c=…/h rms=… -> 14:59`            | exponential fit with fixed $A$: rate constant $c$, RMS of the residuals in °C, ETA (wall-clock time of the last reading's day) |
 | `<- A = Pit (schnellste Exp.-Variante)` | marks the variant with $A$ = pit, the fastest exponential one                                                                  |
-| `A frei (≤Pit): A=98.5±1.8 °C`          | free fit, $A$ bounded by the pit temperature, with standard error                                                              |
+| `A frei (≤Pit): A=102.5±3.9 °C`        | free fit, $A$ bounded by the pit temperature, with standard error                                                              |
 | `nie (A <= Ziel)`                       | never: $A$ does not exceed the target                                                                                          |
 | `nicht absehbar (…)`                    | not foreseeable: ETA more than 24 h ahead (core barely rising)                                                                 |
 
@@ -202,7 +204,7 @@ Besides the cook of 10/11 Oct, five more Element exports were analysed:
 
 | Export     | Date      | Resolution    | Course                                              | Target reached                        | Use                                       |
 |------------|-----------|---------------|-----------------------------------------------------|---------------------------------------|-------------------------------------------|
-| `15f2e6f5` | 10/11 Oct | 0.1 °C        | wrap ~05:30; export ends 10:25 at 89.8 °C           | unknown                               | derivation, tests; free A = 98.5 ± 1.8 °C |
+| `15f2e6f5` | 10/11 Oct | 0.1 °C        | wrap ~05:30; export ends 10:25 at 89.8 °C           | unknown                               | derivation, tests; free A = 102.5 ± 3.9 °C |
 | `e62a2cc9` | 26/27 Sep | 0.1 °C        | stall 01:51–04:46, wrap 04:46                       | 95 °C 08:03, 96 °C 08:44, 97 °C 09:25 | backtest; free A = 97.4–98.1 °C           |
 | `8d401460` | 25 Jul    | whole degrees | stall 03:22–07:00, wrap probably ~06:30             | 95 °C 13:08, 96 °C 14:10              | backtest                                  |
 | `62bebe00` | 23 Jun    | whole degrees | data gap 01:12–07:29                                | 95 °C 13:06, 96 °C 13:27              | backtest                                  |
@@ -255,10 +257,10 @@ All cooks were also replayed through the watcher's current alert logic, without 
 ## 8. Interpretation and limitations
 
 - **A range, not a point.** For the 11 Oct cook the result was: earliest ~14:50 (A = pit), likely around 16:00–16:30, with a risk of an outlier towards 18:00 if $A$ really is ~98 °C. MEATER estimated ~15:30 at 10:25.
-- **An $A$ close to the target reacts strongly to small changes.** ±1.8 °C in $A$ means several hours of difference in the ETA. The RMS differences between the variants (0.07 vs. 0.09 °C) are close to the sensor resolution. That is a hint, not proof.
+- **An $A$ close to the target reacts strongly to small changes.** A few °C in $A$ mean several hours of difference in the ETA (anchored $T_0$ gave 98.5 °C → 18:26, fitted $T_0$ 102.5 °C → 16:05). The RMS differences between the variants (0.058 vs. 0.061 °C) are close to the sensor resolution. That is a hint, not proof.
 - **The watcher shows only A = pit**, i.e. the earliest exponential arrival. A free $A$ needs about two hours of end phase before the curvature separates the variants (see `wachtmeater eta`). A = 100 °C was the best early estimate in the backtest.
 - **With whole degrees (browser fallback) the end-phase forecast does not work.** This applies to fitting $A$ freely; the watcher still calculates with fixed A = pit.
-- **The thresholds are based on few cooks** (RMS 0.1 °C, standard error 3 °C), only one of them with decimals and a known arrival. They are configurable or documented in `core_forecast.py` and should be reviewed after more cooks.
+- **The thresholds are based on few cooks** (RMS 0.1 °C, standard error 5 °C), only one of them with decimals and a known arrival. They are configurable or documented in `core_forecast.py` and should be reviewed after more cooks.
 - **The target temperature is only a guide.** The brisket is done when the probe slides in like butter. Start checking at ~93 °C.
 - **In a hurry?** Set the smoker to 125–135 °C after the wrap; Pit Physics recommends 275 °F. In foil this only raises $A$ while the surface is not capped at ~100 °C. Butcher paper or a foil boat benefit more.
 

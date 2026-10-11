@@ -60,13 +60,15 @@ Der Watcher rechnet **eine** Variante: $A$ fest auf der Smokertemperatur (**A = 
 Die Original-Notiz rechnete mit `scipy.optimize.curve_fit`. Im Watcher-Image wären numpy und scipy zwei schwere neue Abhängigkeiten für einen kleinen Fit. Deshalb rechnet `core_forecast` in reinem Python:
 
 - **Warum kein geschlossener Ausdruck:** $c$ steht im Exponenten, der Fit ist also *nichtlineare* kleinste Quadrate. Man könnte logarithmieren ($\ln(A - T)$ gegen $t$) und dann eine Gerade fitten. Das gewichtet die Abweichungen aber anders: Fehler nahe $A$ werden aufgeblasen. Es liefert dann ein anderes $c$ als `curve_fit`.
-- **Festes $A$:** Es bleibt ein Parameter $c$ mit bekanntem Bereich. Den findet eine eindimensionale **Golden-Section-Suche** auf der Fehlerquadratsumme $SSE(c)$. Sie braucht weder Ableitungen noch einen Startwert, bleibt in den Grenzen und konvergiert garantiert. Jeder Schritt verkleinert das Intervall um den Faktor 0,618.
+- **$T_0$ wird mitgefittet** wie im Standardmodell der asymptotischen Regression (R: `SSasymp`), statt am ersten Messwert verankert zu werden. Sonst verschiebt ein einziger verrauschter erster Punkt die ganze Kurve: −1 °C im ersten Punkt verschob die ETA am 11.10. um 56 Minuten (A = Pit) bzw. 82 Minuten (A = 100 °C), mit gefittetem $T_0$ sind es 19 bzw. 29 Minuten. Bei gegebenem $A$ und $c$ ist das Modell linear in $T_0$, das beste $T_0$ hat also eine geschlossene Form und kostet keine zusätzliche Suche.
+- **Festes $A$:** Es bleibt ein gesuchter Parameter $c$ mit bekanntem Bereich. Den findet eine eindimensionale **Golden-Section-Suche** auf der Fehlerquadratsumme $SSE(c)$. Sie braucht weder Ableitungen noch einen Startwert, bleibt in den Grenzen und konvergiert garantiert. Jeder Schritt verkleinert das Intervall um den Faktor 0,618.
 - **Freies $A$:** Für jedes Kandidaten-$A$ wird das beste $c$ bestimmt (das „Profil“). Das Profil wird dann ebenfalls per Golden Section über $A \in [T_Z + 0{,}1;\ \text{Pit}]$ minimiert. So sind die Grenzen direkt eingebaut, und es ergibt sich dasselbe Optimum wie `curve_fit` mit `bounds`.
-- **Unsicherheit von $A$** (das „±1,8“): Sie kommt aus der Jacobi-Matrix. Die hält für jeden Messpunkt fest, wie stark der Modellwert auf eine kleine Änderung von $A$ bzw. $c$ reagiert:
+- **Unsicherheit von $A$** (das „±3,9“): Sie kommt aus der Jacobi-Matrix. Die hält für jeden Messpunkt fest, wie stark der Modellwert auf eine kleine Änderung von $A$, $T_0$ bzw. $c$ reagiert:
   - $\partial T/\partial A = 1 - e^{-ct}$: Am Anfang des Fensters ist das 0, am Ende fast 1. Über $A$ sagen also vor allem die späten Punkte etwas aus.
+  - $\partial T/\partial T_0 = e^{-ct}$: verschiebt den Kurvenanfang und klingt mit der Zeit ab.
   - $\partial T/\partial c = (A - T_0)\,t\,e^{-ct}$: Das ist in der Kurvenmitte am größten.
 
-  Aus diesen Ableitungen entsteht $\text{cov} = s^2 (J^\top J)^{-1}$ mit $s^2 = SSE/(n-2)$. Das ist dieselbe Formel, die `curve_fit` verwendet. Die Unsicherheit wird groß, wenn sich $A$ und $c$ gegenseitig ersetzen können: Ein höheres $A$ mit kleinerem $c$ ergibt fast dieselbe Kurve.
+  Aus diesen Ableitungen entsteht $\text{cov} = s^2 (J^\top J)^{-1}$ mit $s^2 = SSE/(n-3)$. Das ist dieselbe Formel, die `curve_fit` verwendet. Die Unsicherheit wird groß, wenn sich die Parameter gegenseitig ersetzen können: Ein höheres $A$ mit kleinerem $c$ ergibt fast dieselbe Kurve. Mit $T_0$ als drittem Parameter ist $A$ deshalb unsicherer als mit verankertem $T_0$ (±3,9 statt ±1,8 °C am 11.10.); die Stabilitätsschwelle liegt entsprechend bei 5 °C statt 3 °C.
 - **Laufzeit:** etwa 0,2 s für 120 Punkte und 0,03 s für 15 Punkte. Der Watcher dünnt seine Samples auf höchstens 120 Punkte aus.
 
 Die Docstrings in `core_forecast.py` erklären jeden Rechenschritt im Detail.
@@ -75,7 +77,7 @@ Die Docstrings in `core_forecast.py` erklären jeden Rechenschritt im Detail.
 
 Laut Original-Notiz darf **nur die Endphase** gefittet werden, also nach Stall und Wrap. Der Watcher startet den Fit zu einem **festen Zeitpunkt**: `endphase_settle_minutes` (Default 60) nach `wrapped`.
 
-- Die Kurve wird am Kernwert zum Fit-Start **verankert** ($T_0$ = erster Messwert im Fenster). Gefittet wird nur $c$ (`core_forecast.fit_fixed_ambient`), mit $A$ = Pit.
+- Gefittet werden $c$ und der Startwert $T_0$ (`core_forecast.fit_fixed_ambient`), mit $A$ = Pit.
 - Die ETA wird vom **aktuellen** Messwert gerechnet: $\Delta t = \ln\frac{A - T_{now}}{A - T_Z}/c$.
 - Die erste Prognose kommt, sobald das Fenster mindestens `endphase_min_minutes` (60) Daten enthält.
 - **Störungen oder Pausen** (`trend_ignore_before`) verschieben den Fit-Start nicht. Sie wirken nur auf den linearen Trend und die Stall-Rate. Mit `trend ab HH:MM` lässt sich deren Auswertung gezielt neu ansetzen.
@@ -109,7 +111,7 @@ Endphasen-Prognose: sammelt Daten (Fit ab 06:24, erste Prognose fruehestens ~07:
 Genug Daten:
 
 ```
-Endphasen-Prognose bis 96.0 C (A=Pit 110 C, Fit 06:33-10:13, 23 Punkte, RMS 0.51 C): ~13:17
+Endphasen-Prognose bis 96.0 C (A=Pit 110 C, Fit 06:33-10:13, 23 Punkte, RMS 0.33 C): ~13:38
 ```
 
 Sonderfälle: `...: nie (Pit <= Ziel)` und `...: nicht absehbar (Kern steigt kaum)` (ETA > 24 h).
@@ -138,16 +140,16 @@ wachtmeater eta "….zip" --since 06:30 --auto
 wachtmeater eta "Element - Wachtmeater e62a2cc9 - ….zip" --since 05:46 --until 07:52 --auto --target 97 --pit 120
 ```
 
-Ausgabe für den Cook vom 11.10.2026. Sie ist identisch zur scipy-Ausgabe der Original-Notiz:
+Ausgabe für den Cook vom 11.10.2026. Sie ist identisch zu `scipy.optimize.curve_fit` mit $A$, $T_0$ und $c$ frei. Die Original-Notiz hatte $T_0$ am ersten Punkt verankert und kam deshalb auf etwas andere Werte (z. B. A frei = 98,5 ± 1,8 °C → 18:26):
 
 ```
 Fit 08:01–10:25 (15 Punkte): Kern 84.9→89.8 °C, MEATER-Ambient Ø 103.8 °C, Pit 110 °C, Ziel 96.5 °C
 linear      : 1.99 °C/h  -> 13:45  (früheste Ankunft)
-A=110.0 °C : c=0.092/h rms=0.091 -> 14:49  <- A = Pit (schnellste Exp.-Variante)
-A=104.0 °C : c=0.124/h rms=0.078 -> 15:34
-A=102.0 °C : c=0.141/h rms=0.073 -> 16:05
-A=100.0 °C : c=0.162/h rms=0.069 -> 17:01
-A frei (≤Pit): A=98.5±1.8 °C c=0.183/h -> 18:26
+A=110.0 °C : c=0.088/h rms=0.061 -> 14:59  <- A = Pit (schnellste Exp.-Variante)
+A=104.0 °C : c=0.121/h rms=0.058 -> 15:43
+A=102.0 °C : c=0.137/h rms=0.058 -> 16:14
+A=100.0 °C : c=0.159/h rms=0.059 -> 17:09
+A frei (≤Pit): A=102.5±3.9 °C c=0.133/h -> 16:05
 ```
 
 **So liest man die Ausgabe:**
@@ -158,9 +160,9 @@ A frei (≤Pit): A=98.5±1.8 °C c=0.183/h -> 18:26
 | `Kern 84.9→89.8 °C`                     | Kerntemperatur am Anfang und Ende des Fensters                                                     |
 | `MEATER-Ambient Ø`                      | mittlerer MEATER-Ambient — nur zur Info, kein gültiges $A$                                         |
 | `linear … (früheste Ankunft)`           | linearer Trend, die früheste Ankunft                                                               |
-| `A=… : c=…/h rms=… -> 14:49`            | Exponentieller Fit mit festem $A$: Ratenkonstante $c$, RMS der Abweichungen in °C, ETA als Uhrzeit |
+| `A=… : c=…/h rms=… -> 14:59`            | Exponentieller Fit mit festem $A$: Ratenkonstante $c$, RMS der Abweichungen in °C, ETA als Uhrzeit |
 | `<- A = Pit (schnellste Exp.-Variante)` | markiert die Variante mit $A$ = Pit                                                                |
-| `A frei (≤Pit): A=98.5±1.8 °C`          | freier Fit, $A$ durch die Smokertemperatur begrenzt, mit Standardfehler                            |
+| `A frei (≤Pit): A=102.5±3.9 °C`        | freier Fit, $A$ durch die Smokertemperatur begrenzt, mit Standardfehler                            |
 | `nie (A <= Ziel)`                       | $A$ liegt nicht über dem Ziel, die Kurve erreicht es nie                                           |
 | `nicht absehbar (…)`                    | ETA mehr als 24 Stunden in der Zukunft, der Kern steigt kaum                                       |
 
@@ -199,7 +201,7 @@ Neben dem Cook vom 10./11.10. wurden fünf weitere Element-Exporte ausgewertet:
 
 | Export     | Datum      | Auflösung  | Verlauf                                                      | Ziel erreicht                         | Verwendung                                  |
 |------------|------------|------------|--------------------------------------------------------------|---------------------------------------|---------------------------------------------|
-| `15f2e6f5` | 10./11.10. | 0,1 °C     | Wrap ~05:30; Export endet 10:25 bei 89,8 °C                  | unbekannt                             | Herleitung, Tests; freies A = 98,5 ± 1,8 °C |
+| `15f2e6f5` | 10./11.10. | 0,1 °C     | Wrap ~05:30; Export endet 10:25 bei 89,8 °C                  | unbekannt                             | Herleitung, Tests; freies A = 102,5 ± 3,9 °C |
 | `e62a2cc9` | 26./27.09. | 0,1 °C     | Stall 01:51–04:46, Wrap 04:46                                | 95 °C 08:03, 96 °C 08:44, 97 °C 09:25 | Backtest; freies A = 97,4–98,1 °C           |
 | `8d401460` | 25.07.     | ganze Grad | Stall 03:22–07:00, Wrap vermutlich ~06:30                    | 95 °C 13:08, 96 °C 14:10              | Backtest                                    |
 | `62bebe00` | 23.06.     | ganze Grad | Datenlücke 01:12–07:29                                       | 95 °C 13:06, 96 °C 13:27              | Backtest                                    |
@@ -252,10 +254,10 @@ Alle Cooks wurden außerdem durch die aktuelle Alarmlogik des Watchers gespielt,
 ## 8. Interpretation und Grenzen
 
 - **Spanne statt Punkt.** Beim Cook vom 11.10. ergab sich: frühestens ~14:50 (A = Pit), wahrscheinlich gegen 16:00–16:30, mit Ausreißerrisiko Richtung 18 Uhr, falls $A$ wirklich bei ~98 °C liegt. MEATER schätzte um 10:25 ~15:30.
-- **Ein $A$ nahe dem Ziel reagiert stark auf kleine Änderungen.** ±1,8 °C bei $A$ heißen mehrere Stunden Unterschied in der ETA. Die RMS-Unterschiede zwischen den Varianten (0,07 vs. 0,09 °C) liegen nahe an der Sensorauflösung. Das ist ein Hinweis, kein Beweis.
+- **Ein $A$ nahe dem Ziel reagiert stark auf kleine Änderungen.** Wenige °C bei $A$ heißen mehrere Stunden Unterschied in der ETA (mit verankertem $T_0$ ergab sich 98,5 °C → 18:26, mit gefittetem 102,5 °C → 16:05). Die RMS-Unterschiede zwischen den Varianten (0,058 vs. 0,061 °C) liegen nahe an der Sensorauflösung. Das ist ein Hinweis, kein Beweis.
 - **Der Watcher zeigt nur A = Pit** und damit die früheste exponentielle Ankunft. Ein freies $A$ braucht etwa zwei Stunden Endphase, bis die Krümmung die Varianten trennt (siehe `wachtmeater eta`). A = 100 °C war im Backtest die beste frühe Schätzung.
 - **Bei ganzen Grad (Browser-Fallback) trägt die Endphasen-Prognose nicht.** Das gilt für die freie Anpassung von $A$; mit festem A = Pit rechnet der Watcher trotzdem.
-- **Die Schwellen beruhen auf wenigen Cooks** (RMS 0,1 °C, Standardfehler 3 °C), davon nur einer mit Nachkommastellen und bekannter Ankunft. Sie sind konfigurierbar bzw. in `core_forecast.py` dokumentiert und sollten nach weiteren Cooks überprüft werden.
+- **Die Schwellen beruhen auf wenigen Cooks** (RMS 0,1 °C, Standardfehler 5 °C), davon nur einer mit Nachkommastellen und bekannter Ankunft. Sie sind konfigurierbar bzw. in `core_forecast.py` dokumentiert und sollten nach weiteren Cooks überprüft werden.
 - **Die Zieltemperatur ist nur ein Richtwert.** Fertig ist das Brisket, wenn der Fühler wie in Butter gleitet. Ab ~93 °C prüfen.
 - **Es eilt?** Den Smoker nach dem Wrap auf 125–135 °C stellen; Pit Physics empfiehlt 275 °F. Bei Folie hebt das $A$ nur, solange die Oberfläche nicht bei ~100 °C gedeckelt ist. Butcher Paper oder ein Folienboot profitieren stärker.
 
