@@ -342,16 +342,18 @@ class MonitoringConfig(_EnvMixin):
             stall detection runs (``STALL_CORE_MIN``).
         stall_core_max: Upper bound of the core temperature range in which
             stall detection runs (``STALL_CORE_MAX``).
-        stall_disturbance_ambient_drop: Ambient drop in C versus the
-            previous reading or the moving average that marks a disturbance
-            (lid open, wrapping) and pauses stall detection
-            (``STALL_DISTURBANCE_AMBIENT_DROP``).
-        stall_disturbance_core_drop: Core drop in C versus the previous
-            reading that marks a disturbance, e.g. a re-inserted probe
-            (``STALL_DISTURBANCE_CORE_DROP``).
-        stall_disturbance_ambient_rise: Ambient rise in C above the highest
-            reading of the last ``FORECAST_WINDOW_MINUTES`` that marks a
-            disturbance (fire flare-up); restarts trend and end-phase fit
+        stall_disturbance_ambient_drop: Minimum ambient drop in C below the
+            median of the last ``FORECAST_WINDOW_MINUTES`` that marks a
+            disturbance (lid open, wrapping) and pauses stall detection
+            (``STALL_DISTURBANCE_AMBIENT_DROP``).  Like the other two
+            thresholds it is raised to 3 sigma of the reading noise (Hampel
+            identifier) when the signal is noisier.
+        stall_disturbance_core_drop: Minimum core drop in C versus the
+            previous reading that marks a disturbance, e.g. a re-inserted
+            probe (``STALL_DISTURBANCE_CORE_DROP``).
+        stall_disturbance_ambient_rise: Minimum ambient rise in C above the
+            highest reading of the last ``FORECAST_WINDOW_MINUTES`` that marks
+            a disturbance (fire flare-up); restarts trend and end-phase fit
             (``STALL_DISTURBANCE_AMBIENT_RISE``).
         stall_disturbance_pause_checks: Checks to skip stall evaluation
             after a disturbance (``STALL_DISTURBANCE_PAUSE_CHECKS``).
