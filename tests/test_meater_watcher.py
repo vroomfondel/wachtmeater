@@ -89,6 +89,16 @@ class TestAlertSummary:
         lines = status_text.alert_summary(base_state)
         assert any("Wrap-Reminder: AN" in l and "stumm in der Ruhephase" in l for l in lines)
 
+    def test_stall_muted_in_restphase_hides_disturbance_pause(self, base_state: WatcherState) -> None:
+        base_state.tempalert_stall_enabled = True
+        base_state.stall_pause_checks_left = 2
+        base_state.tempalert_ruhephase_enabled = True
+        base_state.ruhephase_target_temp = 65.0
+        lines = status_text.alert_summary(base_state)
+        stall = next(l for l in lines if l.startswith("Stall: AN"))
+        assert "stumm in der Ruhephase" in stall
+        assert "Stoerung" not in stall
+
     def test_wrap_already_alerted(self, base_state: WatcherState) -> None:
         base_state.tempalert_wrap_enabled = True
         base_state.wrap_target_temp = 75.0
@@ -1019,6 +1029,16 @@ class TestRunMeaterCheck:
         assert base_state.stall_alerted is True
         msgs = [c.args[0] for c in send.call_args_list]
         assert any("STALL ERKANNT" in m and "C/h" in m and "Jetzt wrappen?" in m for m in msgs)
+
+    def test_stall_muted_in_restphase(self, base_state: WatcherState) -> None:
+        base_state.tempalert_stall_enabled = True
+        base_state.stall_max_rate = 4.0
+        base_state.tempalert_ruhephase_enabled = True
+        base_state.ruhephase_target_temp = 50.0
+        self._seed_internal(base_state, [70.0, 70.4, 70.8])
+        mock_call = self._run_stall(base_state, 71.2)
+        assert base_state.stall_alerted is False
+        assert not any("Stall" in c.args[0] for c in mock_call.call_args_list)
 
     def test_stall_ignores_falling_temperature(self, base_state: WatcherState) -> None:
         base_state.tempalert_stall_enabled = True

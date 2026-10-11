@@ -300,7 +300,9 @@ def alert_summary(state: WatcherState) -> list[str]:
         )
         if state.stall_alerted:
             s += " [bereits ausgeloest]"
-        if state.stall_pause_checks_left > 0:
+        if state.tempalert_ruhephase_enabled:
+            s += " [stumm in der Ruhephase]"
+        elif state.stall_pause_checks_left > 0:
             s += f" [pausiert nach Stoerung: noch {state.stall_pause_checks_left} Check(s)]"
         lines.append(s)
     else:

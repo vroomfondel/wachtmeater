@@ -368,9 +368,11 @@ def run_meater_check(
                 logger.info("Ruhephase-Alert automatisch deaktiviert.")
 
     # 3) Stall detection: rise rate over a time window inside the plausible
-    #    core range.  Falling temperatures, disturbances and ``pause`` are
-    #    no stall.
-    if state.tempalert_stall_enabled and not (disturbance or stall_cooling_down or paused):
+    #    core range.  Falling temperatures, disturbances, ``pause`` and the
+    #    rest phase are no stall.
+    if state.tempalert_stall_enabled and not (
+        disturbance or stall_cooling_down or paused or state.tempalert_ruhephase_enabled
+    ):
         pts = trend_window(state.internal_samples, now, STALL_WINDOW_MINUTES, state.trend_ignore_before)
         if pts is not None:
             rate = slope_per_hour(pts)
