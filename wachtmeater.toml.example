@@ -40,6 +40,7 @@ endphase_settle_minutes     = 60      # Fit-Start nach 'wrapped' (fest)
 endphase_min_minutes        = 60      # Mindest-Datenspanne fuer die Endphasen-Prognose
 cookend_error_threshold     = 3
 cookend_probe_removed_temp  = 35
+station_offline_call_threshold = 2    # Offline-Zyklen der Station, bis ein SIP-Anruf rausgeht
 # Read temperatures from the MEATER Cloud WebSocket (0.03125 C resolution)
 # instead of the page DOM (whole degrees). Scraping stays as fallback.
 cloud_ws_enabled            = true
@@ -59,6 +60,7 @@ tempalert_ambient_range_enabled = false # Smoker zu heiss / zu kalt
 ambient_range_min = 0.0                 # Min Ambient in C (0 = nicht gesetzt)
 ambient_range_max = 0.0                 # Max Ambient in C (0 = nicht gesetzt)
 tempalert_cookend_enabled = true        # Auto-Erkennung: Cook beendet / Probe entfernt
+tempalert_station_offline_enabled = true # MEATER-Station offline -> Anruf
 
 [matrix]
 # room           = "!exampleroom:matrix.example.com"
