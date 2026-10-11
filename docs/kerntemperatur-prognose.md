@@ -10,7 +10,7 @@ Wann erreicht der Kern die Pull-Temperatur? Der Watcher beantwortet das mit drei
 | **Lineare Watcher-Prognose** | Zeile `Watcher-Prognose bis …`   | Trend der letzten 60 Minuten. Gibt die **früheste mögliche Ankunft** an, weil die echte Kurve abflacht.              |
 | **Endphasen-Prognose**       | Block `Endphasen-Prognose bis …` | Exponentieller Fit nach dem Wrap, physikalisch begründet. Gibt eine Spanne von „frühestens“ bis „wahrscheinlich“ an. |
 
-Diese Notiz beschreibt die Endphasen-Prognose: Modell, Fit, Fit-Fenster, Bedienung und Grenzen. Hergeleitet wurde sie am Brisket-Cook vom 10./11.10.2026 (MEATER-Cook `15f2e6f5`). Der Code steht in [`wachtmeater/core_forecast.py`](../wachtmeater/core_forecast.py), die Einbindung in den Watcher in `wachtmeater/meater_watcher.py` (`_endphase_lines`).
+Diese Notiz beschreibt die Endphasen-Prognose: Modell, Fit, Fit-Fenster, Bedienung und Grenzen. Hergeleitet wurde sie am Brisket-Cook vom 10./11.10.2026 (MEATER-Cook `15f2e6f5`). Der Code steht in [`wachtmeater/core_forecast.py`](../wachtmeater/core_forecast.py), die Einbindung in den Watcher in `wachtmeater/status_text.py` (`endphase_lines`).
 
 ---
 

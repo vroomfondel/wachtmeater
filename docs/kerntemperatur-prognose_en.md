@@ -10,7 +10,7 @@ When will the core reach the pull temperature? The watcher answers this with thr
 | **Linear watcher forecast** | line `Watcher-Prognose bis …`    | Trend over the last 60 minutes. It gives the **earliest possible arrival**, because the real curve flattens. |
 | **End-phase forecast**      | block `Endphasen-Prognose bis …` | Exponential fit after the wrap, physically grounded. It gives a range from "earliest" to "likely".           |
 
-This note describes the end-phase forecast: model, fit, fit window, usage and limitations. It was derived from the brisket cook of 10/11 Oct 2026 (MEATER cook `15f2e6f5`). The code lives in [`wachtmeater/core_forecast.py`](../wachtmeater/core_forecast.py), the watcher integration in `wachtmeater/meater_watcher.py` (`_endphase_lines`).
+This note describes the end-phase forecast: model, fit, fit window, usage and limitations. It was derived from the brisket cook of 10/11 Oct 2026 (MEATER cook `15f2e6f5`). The code lives in [`wachtmeater/core_forecast.py`](../wachtmeater/core_forecast.py), the watcher integration in `wachtmeater/status_text.py` (`endphase_lines`).
 
 The watcher's messages are in German. Status lines and CLI output below are quoted verbatim.
 
