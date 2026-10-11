@@ -229,3 +229,45 @@ class TestGetOrCreateRoomV12:
 
         assert selection.cook is None
         adapter._handler.client.room_create.assert_called_once()
+
+
+class TestStrictSendMessage:
+    """send_message(strict=True) surfaces delivery failures for alert retries."""
+
+    def _adapter(self) -> Any:
+        adapter = _make_adapter()
+        adapter._handler.trust_devices_in_room = AsyncMock()
+        adapter._handler.send_message = AsyncMock()
+        adapter._handler.client.room_send = AsyncMock()
+        return adapter
+
+    def test_non_strict_delegates_to_handler(self) -> None:
+        adapter = self._adapter()
+        asyncio.run(adapter.send_message("!r:x", "hi"))
+        adapter._handler.send_message.assert_awaited_once_with("!r:x", "hi")
+        adapter._handler.client.room_send.assert_not_called()
+
+    def test_strict_success(self) -> None:
+        adapter = self._adapter()
+        adapter._handler.client.room_send.return_value = MagicMock()  # RoomSendResponse-like
+        asyncio.run(adapter.send_message("!r:x", "hi", strict=True))
+        kwargs = adapter._handler.client.room_send.call_args.kwargs
+        assert kwargs["content"] == {"msgtype": "m.text", "body": "hi"}
+
+    def test_strict_raises_on_room_send_error(self) -> None:
+        from nio import RoomSendError
+
+        from wachtmeater.messaging import MessageSendError
+
+        adapter = self._adapter()
+        adapter._handler.client.room_send.return_value = RoomSendError("rate limited", "M_LIMIT_EXCEEDED")
+        with pytest.raises(MessageSendError):
+            asyncio.run(adapter.send_message("!r:x", "hi", strict=True))
+
+    def test_strict_raises_on_exception(self) -> None:
+        from wachtmeater.messaging import MessageSendError
+
+        adapter = self._adapter()
+        adapter._handler.client.room_send.side_effect = TimeoutError("gone")
+        with pytest.raises(MessageSendError):
+            asyncio.run(adapter.send_message("!r:x", "hi", strict=True))

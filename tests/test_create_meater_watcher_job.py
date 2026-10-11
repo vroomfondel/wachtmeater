@@ -85,7 +85,7 @@ class TestBuildConfigContent:
             "tempalert_ruhephase_enabled",
             "ruhephase_target_temp",
             "tempalert_stall_enabled",
-            "stall_min_delta",
+            "stall_max_rate",
             "tempalert_wrap_enabled",
             "wrap_target_temp",
             "tempalert_ambient_range_enabled",
