@@ -16,6 +16,16 @@ from wachtmeater.config import AlertDefaultsConfig, WatcherState
 mw = pytest.importorskip("wachtmeater.meater_watcher")
 
 
+def _field(state: WatcherState, name: str) -> object:
+    """Read a state field without mypy's attribute narrowing.
+
+    After ``state.x = 1.0`` or ``assert state.x is True`` mypy keeps the
+    narrowed type across the call that mutates *state*, flagging follow-up
+    asserts as unreachable.
+    """
+    return getattr(state, name)
+
+
 # ============================================================================
 # _alert_summary
 # ============================================================================
@@ -50,9 +60,9 @@ class TestAlertSummary:
 
     def test_stall_enabled(self, base_state: WatcherState) -> None:
         base_state.tempalert_stall_enabled = True
-        base_state.stall_min_delta = 2.0
+        base_state.stall_max_rate = 2.0
         lines = mw._alert_summary(base_state)
-        assert any("Stall: AN" in l and "2.0" in l for l in lines)
+        assert any("Stall: AN" in l and "< 2 C/h" in l for l in lines)
 
     def test_stall_already_alerted(self, base_state: WatcherState) -> None:
         base_state.tempalert_stall_enabled = True
@@ -288,16 +298,16 @@ class TestHandleCommand:
         assert result is not None
 
     @patch.object(mw, "save_state")
-    def test_enable_stall_default_delta(self, _save: MagicMock, base_state: WatcherState) -> None:
+    def test_enable_stall_default_rate(self, _save: MagicMock, base_state: WatcherState) -> None:
         result = mw.handle_command("enable stall", base_state)
         assert base_state.tempalert_stall_enabled is True
-        assert base_state.stall_min_delta == 0.3
+        assert base_state.stall_max_rate == mw.cfg.alerts.stall_max_rate
         assert result is not None
 
     @patch.object(mw, "save_state")
-    def test_enable_stall_custom_delta(self, _save: MagicMock, base_state: WatcherState) -> None:
+    def test_enable_stall_custom_rate(self, _save: MagicMock, base_state: WatcherState) -> None:
         result = mw.handle_command("enable stall 2.5", base_state)
-        assert base_state.stall_min_delta == 2.5
+        assert base_state.stall_max_rate == 2.5
         assert result is not None
 
     @patch.object(mw, "save_state")
@@ -420,6 +430,57 @@ class TestHandleCommand:
         assert cooking_state.ambient_range_min == 100.0
 
     @patch.object(mw, "save_state")
+    def test_pause_default_minutes(self, _save: MagicMock, base_state: WatcherState) -> None:
+        with patch.object(mw, "_now", return_value=1000.0):
+            result = mw.handle_command("Pause", base_state)
+        assert base_state.pause_until == 1000.0 + mw.PAUSE_DEFAULT_MINUTES * 60
+        assert result is not None and "resume" in result
+        assert base_state.wrap_alerted is False
+
+    @patch.object(mw, "save_state")
+    def test_pause_custom_minutes(self, _save: MagicMock, base_state: WatcherState) -> None:
+        with patch.object(mw, "_now", return_value=1000.0):
+            mw.handle_command("pause 5", base_state)
+        assert base_state.pause_until == 1300.0
+
+    @patch.object(mw, "save_state")
+    def test_pause_zero_rejected(self, _save: MagicMock, base_state: WatcherState) -> None:
+        result = mw.handle_command("pause 0", base_state)
+        assert result is not None and result.startswith("Fehler")
+        assert base_state.pause_until is None
+
+    @patch.object(mw, "save_state")
+    def test_wrapped_pauses_and_marks_wrap_done(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.alert_calls_sent = ["wrap"]
+        with patch.object(mw, "_now", return_value=1000.0):
+            result = mw.handle_command("wrapped 30", base_state)
+        assert base_state.pause_until == 1000.0 + 30 * 60
+        assert base_state.wrap_alerted is True
+        assert base_state.alert_calls_sent == []
+        assert result is not None and "Wrap als erledigt" in result
+
+    @patch.object(mw, "save_state")
+    def test_resume_without_pause(self, _save: MagicMock, base_state: WatcherState) -> None:
+        assert mw.handle_command("resume", base_state) == "Keine Pause aktiv."
+
+    @patch.object(mw, "save_state")
+    def test_resume_resets_max_ambient(self, _save: MagicMock, cooking_state: WatcherState) -> None:
+        cooking_state.pause_until = 5000.0
+        with patch.object(mw, "_now", return_value=1000.0):
+            result = mw.handle_command("resume", cooking_state)
+        assert _field(cooking_state, "pause_until") is None
+        assert cooking_state.max_ambient_temp is None
+        assert cooking_state.trend_ignore_before == 1000.0
+        assert result is not None and "Pause beendet" in result
+
+    @patch.object(mw, "save_state")
+    def test_pause_shown_in_summary(self, _save: MagicMock, base_state: WatcherState) -> None:
+        base_state.pause_until = 1000.0 + 12 * 60
+        with patch.object(mw, "_now", return_value=1000.0):
+            lines = mw._alert_summary(base_state)
+        assert any(l.startswith("Pause: AKTIV (noch 12 Min.") for l in lines)
+
+    @patch.object(mw, "save_state")
     def test_unknown_command(self, _save: MagicMock, base_state: WatcherState) -> None:
         assert mw.handle_command("xyzzy", base_state) is None
 
@@ -489,7 +550,7 @@ class TestStateIO:
         custom_alerts = AlertDefaultsConfig(
             tempalert_tempdown_enabled=False,
             tempalert_stall_enabled=True,
-            stall_min_delta=2.5,
+            stall_max_rate=2.5,
             tempalert_cookend_enabled=False,
             ruhephase_target_temp=55.0,
             wrap_target_temp=75.0,
@@ -502,7 +563,7 @@ class TestStateIO:
             state = mw.load_state()
         assert state.tempalert_tempdown_enabled is False
         assert state.tempalert_stall_enabled is True
-        assert state.stall_min_delta == 2.5
+        assert state.stall_max_rate == 2.5
         assert state.tempalert_cookend_enabled is False
         assert state.ruhephase_target_temp == 55.0
         assert state.wrap_target_temp == 75.0
@@ -547,7 +608,7 @@ class TestApplyAlertDefaults:
             tempalert_ruhephase_enabled=True,
             ruhephase_target_temp=55.0,
             tempalert_stall_enabled=True,
-            stall_min_delta=3.0,
+            stall_max_rate=3.0,
             tempalert_wrap_enabled=True,
             wrap_target_temp=75.0,
             tempalert_ambient_range_enabled=True,
@@ -560,7 +621,7 @@ class TestApplyAlertDefaults:
         assert state.tempalert_ruhephase_enabled is True
         assert state.ruhephase_target_temp == 55.0
         assert state.tempalert_stall_enabled is True
-        assert state.stall_min_delta == 3.0
+        assert state.stall_max_rate == 3.0
         assert state.tempalert_wrap_enabled is True
         assert state.wrap_target_temp == 75.0
         assert state.tempalert_ambient_range_enabled is True
@@ -765,50 +826,111 @@ class TestRunMeaterCheck:
         mock_call.assert_called()
         assert cooking_state.tempalert_ruhephase_enabled is False
 
-    def test_stall_triggers(self, base_state: WatcherState) -> None:
-        base_state.tempalert_stall_enabled = True
-        base_state.stall_min_delta = 1.0
-        # History shows plateau (STALL_WINDOW=3 checks, need >3 entries)
-        base_state.internal_temp_history = [70.0, 70.0, 70.0, 70.0]
-        data = self._make_data(internal_temp_c=70)
+    NOW = 1_800_000_000.0
+
+    def _seed_internal(self, state: WatcherState, temps: list[float], step: int = 600) -> None:
+        """Seed timestamped core samples ending one *step* before ``NOW``."""
+        n = len(temps)
+        state.internal_samples = [[self.NOW - (n - i) * step, t] for i, t in enumerate(temps)]
+
+    def _run_stall(self, state: WatcherState, internal: float, send: MagicMock | None = None) -> MagicMock:
+        data = self._make_data(internal_temp_c=internal)
         with (
+            patch.object(mw, "_now", return_value=self.NOW),
             patch.object(mw, "get_meater_data", return_value=data),
             patch.object(mw, "call_pitmaster") as mock_call,
             patch.object(mw, "save_state"),
         ):
-            mw.run_meater_check(base_state)
+            mw.run_meater_check(state, send=send)
+        return mock_call
+
+    def test_stall_triggers(self, base_state: WatcherState) -> None:
+        base_state.tempalert_stall_enabled = True
+        base_state.stall_max_rate = 4.0
+        # 70.0 -> 71.2 over 30 min = 2.4 C/h, inside the core range
+        self._seed_internal(base_state, [70.0, 70.4, 70.8])
+        send = MagicMock()
+        mock_call = self._run_stall(base_state, 71.2, send)
         mock_call.assert_called()
         assert base_state.stall_alerted is True
+        msgs = [c.args[0] for c in send.call_args_list]
+        assert any("STALL ERKANNT" in m and "C/h" in m and "Jetzt wrappen?" in m for m in msgs)
+
+    def test_stall_ignores_falling_temperature(self, base_state: WatcherState) -> None:
+        base_state.tempalert_stall_enabled = True
+        self._seed_internal(base_state, [72.0, 71.8, 71.6])
+        mock_call = self._run_stall(base_state, 71.4)
+        assert base_state.stall_alerted is False
+        assert not any("Stall" in c.args[0] for c in mock_call.call_args_list)
+
+    def test_stall_outside_core_range_is_ignored(self, base_state: WatcherState) -> None:
+        base_state.tempalert_stall_enabled = True
+        self._seed_internal(base_state, [50.0, 50.1, 50.2])
+        self._run_stall(base_state, 50.3)
+        assert base_state.stall_alerted is False
+
+    def test_stall_needs_full_time_window(self, base_state: WatcherState) -> None:
+        # Three flat readings at a 60 s interval only cover 3 minutes — far
+        # short of the 30-minute window, so no verdict yet.
+        base_state.tempalert_stall_enabled = True
+        self._seed_internal(base_state, [70.0, 70.0, 70.0], step=60)
+        self._run_stall(base_state, 70.0)
+        assert base_state.stall_alerted is False
+
+    def test_stall_window_is_interval_independent(self, base_state: WatcherState) -> None:
+        # Same 2.4 C/h plateau sampled every 60 s over 30 minutes fires too.
+        base_state.tempalert_stall_enabled = True
+        self._seed_internal(base_state, [70.0 + 0.04 * i for i in range(30)], step=60)
+        self._run_stall(base_state, 71.2)
+        assert base_state.stall_alerted is True
+
+    def test_stall_after_wrap_does_not_ask_to_wrap(self, base_state: WatcherState) -> None:
+        base_state.tempalert_stall_enabled = True
+        base_state.wrap_alerted = True
+        self._seed_internal(base_state, [70.0, 70.4, 70.8])
+        send = MagicMock()
+        self._run_stall(base_state, 71.2, send)
+        stall_msgs = [c.args[0] for c in send.call_args_list if "STALL" in c.args[0]]
+        assert stall_msgs and all("wrappen?" not in m for m in stall_msgs)
 
     def test_stall_does_not_retrigger(self, base_state: WatcherState) -> None:
         base_state.tempalert_stall_enabled = True
         base_state.stall_alerted = True  # already alerted
-        base_state.internal_temp_history = [70.0, 70.0, 70.0, 70.0]
-        data = self._make_data(internal_temp_c=70)
-        with (
-            patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
-        ):
-            mw.run_meater_check(base_state)
+        self._seed_internal(base_state, [70.0, 70.0, 70.0])
+        mock_call = self._run_stall(base_state, 70.0)
         # call_pitmaster should not be called for stall (already alerted)
         for call in mock_call.call_args_list:
             assert "Stall" not in call[0][0]
 
     def test_stall_resets_on_recovery(self, base_state: WatcherState) -> None:
         base_state.tempalert_stall_enabled = True
-        base_state.stall_alerted = False
-        base_state.stall_min_delta = 1.0
-        # Big rise → rise >= min_delta * 2 → reset
-        base_state.internal_temp_history = [70.0, 71.0, 72.0, 73.0]
-        data = self._make_data(internal_temp_c=75)
-        with (
-            patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster"),
-            patch.object(mw, "save_state"),
-        ):
-            mw.run_meater_check(base_state)
+        base_state.stall_alerted = True
+        base_state.stall_max_rate = 4.0
+        # 70 -> 75 in 30 min = 10 C/h >= 2 x threshold -> re-armed
+        self._seed_internal(base_state, [70.0, 71.7, 73.3])
+        self._run_stall(base_state, 75.0)
         assert base_state.stall_alerted is False
+
+    def test_stall_message_failure_is_retried(self, base_state: WatcherState) -> None:
+        base_state.tempalert_stall_enabled = True
+        self._seed_internal(base_state, [70.0, 70.4, 70.8])
+
+        def _send(text: str, image: str | None) -> None:
+            if "STALL" in text:
+                raise RuntimeError("homeserver down")
+
+        mock_call = self._run_stall(base_state, 71.2, MagicMock(side_effect=_send))
+        assert base_state.stall_alerted is False  # not delivered -> not marked
+        assert sum("Stall" in c.args[0] for c in mock_call.call_args_list) == 1
+        # Next check: message gets through, but the phone does not ring twice.
+        self.NOW += 600
+        self._seed_internal(base_state, [70.4, 70.8, 71.2])
+        send_ok = MagicMock()
+        mock_call = self._run_stall(base_state, 71.6, send_ok)
+        assert _field(base_state, "stall_alerted") is True
+        assert any("STALL" in c.args[0] for c in send_ok.call_args_list)
+        assert not any("Stall" in c.args[0] for c in mock_call.call_args_list)
+        assert base_state.alert_calls_sent == []
 
     def test_wrap_triggers(self, base_state: WatcherState) -> None:
         base_state.tempalert_wrap_enabled = True
@@ -947,6 +1069,144 @@ class TestRunMeaterCheck:
             result = mw.run_meater_check(base_state)
         assert result == "__cook_ended__"
         assert base_state.cook_ended is True
+
+    def _run_with_send(self, state: WatcherState, send: MagicMock, **data: Any) -> tuple[str, MagicMock]:
+        with (
+            patch.object(mw, "get_meater_data", return_value=self._make_data(**data)),
+            patch.object(mw, "call_pitmaster") as mock_call,
+            patch.object(mw, "save_state"),
+        ):
+            result = mw.run_meater_check(state, send=send)
+        return result, mock_call
+
+    @staticmethod
+    def _failing_send(needle: str) -> MagicMock:
+        def _send(text: str, image: str | None) -> None:
+            if needle in text:
+                raise RuntimeError("M_FORBIDDEN")
+
+        return MagicMock(side_effect=_send)
+
+    @staticmethod
+    def _texts(send: MagicMock) -> list[str]:
+        return [c.args[0] for c in send.call_args_list]
+
+    def test_tempdown_posts_message(self, cooking_state: WatcherState) -> None:
+        cooking_state.max_ambient_temp = 130.0
+        send = MagicMock()
+        self._run_with_send(cooking_state, send, ambient_temp_c=110)
+        assert any(t.startswith("ACHTUNG") for t in self._texts(send))
+
+    def test_tempdown_muted_during_pause(self, cooking_state: WatcherState) -> None:
+        cooking_state.max_ambient_temp = 130.0
+        cooking_state.pause_until = 2_000_000_000.0
+        send = MagicMock()
+        with patch.object(mw, "_now", return_value=1_900_000_000.0):
+            _, mock_call = self._run_with_send(cooking_state, send, ambient_temp_c=80)
+        assert not any("ACHTUNG" in t for t in self._texts(send))
+        mock_call.assert_not_called()
+
+    def test_ambient_range_muted_during_pause_but_pull_stays_active(self, base_state: WatcherState) -> None:
+        base_state.tempalert_ambient_range_enabled = True
+        base_state.ambient_range_min = 100.0
+        base_state.ambient_range_max = 130.0
+        base_state.target_override = 90.0
+        base_state.pause_until = 2_000_000_000.0
+        send = MagicMock()
+        with patch.object(mw, "_now", return_value=1_900_000_000.0):
+            _, mock_call = self._run_with_send(base_state, send, ambient_temp_c=80, internal_temp_c=91)
+        texts = self._texts(send)
+        assert not any("Ambient zu niedrig" in t for t in texts)
+        assert any("Rausnehmen" in t for t in texts)
+        assert base_state.target_reached_calls == 1
+
+    def test_pause_expiry_resets_max_ambient(self, cooking_state: WatcherState) -> None:
+        cooking_state.max_ambient_temp = 130.0
+        cooking_state.pause_until = 1_000.0
+        send = MagicMock()
+        with patch.object(mw, "_now", return_value=2_000.0):
+            result, mock_call = self._run_with_send(cooking_state, send, ambient_temp_c=100)
+        assert _field(cooking_state, "pause_until") is None
+        assert cooking_state.max_ambient_temp == 100
+        assert "Pause beendet" in result
+        mock_call.assert_not_called()
+
+    def test_ruhephase_posts_message_and_stays_armed_on_send_failure(self, cooking_state: WatcherState) -> None:
+        cooking_state.tempalert_ruhephase_enabled = True
+        cooking_state.ruhephase_target_temp = 75.0
+        _, mock_call = self._run_with_send(cooking_state, self._failing_send("Ruhephase"), internal_temp_c=74)
+        assert cooking_state.tempalert_ruhephase_enabled is True
+        mock_call.assert_called_once()
+        send = MagicMock()
+        _, mock_call = self._run_with_send(cooking_state, send, internal_temp_c=73)
+        assert any("Ruhephase beendet" in t for t in self._texts(send))
+        assert _field(cooking_state, "tempalert_ruhephase_enabled") is False
+        mock_call.assert_not_called()  # the call already went out
+
+    def test_ambient_range_posts_message(self, base_state: WatcherState) -> None:
+        base_state.tempalert_ambient_range_enabled = True
+        base_state.ambient_range_min = 100.0
+        base_state.ambient_range_max = 130.0
+        send = MagicMock()
+        self._run_with_send(base_state, send, ambient_temp_c=140)
+        assert any("Ambient zu hoch" in t for t in self._texts(send))
+
+    def test_target_reached_without_override_posts_message(self, base_state: WatcherState) -> None:
+        send = MagicMock()
+        self._run_with_send(base_state, send, internal_temp_c=96, target_temp_c=96)
+        assert any("fertig" in t for t in self._texts(send))
+        assert base_state.target_reached_calls == 1
+
+    def test_pull_not_counted_when_message_fails(self, base_state: WatcherState) -> None:
+        base_state.target_override = 88.0
+        _, mock_call = self._run_with_send(base_state, self._failing_send("Rausnehmen"), internal_temp_c=89)
+        mock_call.assert_called_once()  # pull alarm still rings
+        assert base_state.target_reached_calls == 0
+
+    def test_cookend_done_posts_message(self, base_state: WatcherState) -> None:
+        send = MagicMock()
+        result, _ = self._run_with_send(base_state, send, status="done")
+        assert result == "__cook_ended__"
+        assert any("Status 'done'" in t for t in self._texts(send))
+
+    def test_probe_removed_not_ended_until_message_delivered(self, base_state: WatcherState) -> None:
+        base_state.max_internal_temp = 80.0
+        result, mock_call = self._run_with_send(base_state, self._failing_send("Cook-Ende"), internal_temp_c=30)
+        assert result != "__cook_ended__"
+        assert base_state.cook_ended is False
+        mock_call.assert_called_once()
+        result, mock_call = self._run_with_send(base_state, MagicMock(), internal_temp_c=30)
+        assert result == "__cook_ended__"
+        mock_call.assert_not_called()
+
+    def test_offline_notice_retried_until_delivered(self, base_state: WatcherState) -> None:
+        offline = {"status": "offline", "cook_name": "Brisket"}
+        failing = MagicMock(side_effect=RuntimeError("down"))
+        with (
+            patch.object(mw, "get_meater_data", return_value=offline),
+            patch.object(mw, "call_pitmaster"),
+            patch.object(mw, "save_state"),
+        ):
+            mw.run_meater_check(base_state, send=failing)
+            assert base_state.offline_notified is False
+            send = MagicMock()
+            mw.run_meater_check(base_state, send=send)
+            assert _field(base_state, "offline_notified") is True
+            mw.run_meater_check(base_state, send=send)
+        assert sum("offline" in t for t in self._texts(send)) == 1
+
+    def test_remaining_zero_shown_as_unknown(self, base_state: WatcherState) -> None:
+        result, _ = self._run_with_send(base_state, MagicMock(), remaining_time="0m", remaining_minutes=0)
+        assert "Remaining: 0m" not in result
+        assert "Remaining: unbekannt" in result
+
+    def test_remaining_positive_shown(self, base_state: WatcherState) -> None:
+        result, _ = self._run_with_send(base_state, MagicMock(), remaining_time="2h 30m", remaining_minutes=150)
+        assert "Remaining: 2h 30m" in result
+
+    def test_target_line_without_override(self, base_state: WatcherState) -> None:
+        result, _ = self._run_with_send(base_state, MagicMock(), target_temp_c=98)
+        assert "Target: 98.0 C\n" in result
 
     def test_resets_consecutive_errors_on_success(self, base_state: WatcherState) -> None:
         base_state.consecutive_errors = 2
@@ -1153,3 +1413,50 @@ class TestUpdateRoomRouting:
         """Without a per-cook room the broadcast room stays the only target."""
         rooms = self._run(updates_to_broadcast_room=False, cook_room=None)
         assert rooms == ["!broadcast:test"]
+
+
+# ============================================================================
+# Periodic check scheduling
+# ============================================================================
+
+
+class TestPeriodicSchedule:
+    """Checks run on fixed deadlines; their own duration does not add drift."""
+
+    def test_check_duration_does_not_accumulate(self) -> None:
+        import time as _time
+
+        interval = 0.2
+        check_cost = 0.08
+        starts: list[float] = []
+        loop_holder: dict[str, Any] = {}
+
+        def _slow_check(state: WatcherState, send: Any = None) -> str:
+            starts.append(_time.monotonic())
+            _time.sleep(check_cost)
+            return "ok"
+
+        async def _sync() -> None:
+            # 1 initial check + 5 periodic ones, then stop
+            while len(starts) < 6:
+                await asyncio.sleep(0.01)
+
+        mock_messaging = _make_mock_messaging(sync_side_effect=_sync)
+        with (
+            patch.object(mw, "MEATER_URL", "https://meater.io/test-uuid"),
+            patch.object(mw, "load_state", return_value=WatcherState()),
+            patch.object(mw, "save_state"),
+            patch.object(mw, "call_pitmaster"),
+            patch.object(mw, "run_meater_check", side_effect=_slow_check),
+            patch.object(mw, "effective_check_interval", return_value=interval),
+            patch.object(mw, "cfg") as mock_cfg,
+        ):
+            mock_cfg.matrix.room = "!room:test"
+            mock_cfg.matrix.auto_create_room_for_meater_uuid = False
+            mock_cfg.matrix.pitmaster = ""
+            asyncio.run(mw.event_loop(skip_startup_test_call=True, messaging=mock_messaging))
+
+        periodic = starts[1:6]
+        span = periodic[-1] - periodic[0]
+        # 4 gaps: fixed-rate ~0.8 s; the old wait-after-check scheme ~1.12 s.
+        assert span == pytest.approx(4 * interval, abs=0.1)

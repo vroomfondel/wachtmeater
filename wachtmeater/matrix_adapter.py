@@ -17,10 +17,10 @@ Env vars (from .env):
 from pathlib import Path
 from typing import ClassVar
 
-from nio import UploadResponse
+from nio import RoomSendError, UploadResponse
 from nio.exceptions import LocalProtocolError
 
-from wachtmeater.messaging import MessageCallback, RoomSelection
+from wachtmeater.messaging import MessageCallback, MessageSendError, RoomSelection
 
 from wachtmeater import cfg, read_dot_env_to_environ
 
@@ -257,10 +257,35 @@ class MatrixMessagingAdapter:
         user_id: str = getattr(self._handler.client, "user_id", cfg.matrix.user)
         return user_id
 
-    async def send_message(self, room_id: str, text: str) -> None:
-        """Trust devices in *room_id* and send a text message."""
+    async def send_message(self, room_id: str, text: str, *, strict: bool = False) -> None:
+        """Trust devices in *room_id* and send a text message.
+
+        Args:
+            room_id: Target Matrix room ID.
+            text: Message body.
+            strict: When ``True``, bypass minimatrix's error-swallowing
+                ``send_message`` and raise ``MessageSendError`` if the
+                homeserver rejects the event (``RoomSendError``) or the send
+                raises.  Used for alerts, which must be retried on failure.
+
+        Raises:
+            MessageSendError: Only with *strict*, when delivery failed.
+        """
         await self._handler.trust_devices_in_room(room_id)
-        await self._handler.send_message(room_id, text)
+        if not strict:
+            await self._handler.send_message(room_id, text)
+            return
+        try:
+            resp = await self._handler.client.room_send(
+                room_id=room_id,
+                message_type="m.room.message",
+                content={"msgtype": "m.text", "body": text},
+                ignore_unverified_devices=True,
+            )
+        except Exception as e:
+            raise MessageSendError(f"Senden an {room_id} fehlgeschlagen: {e}") from e
+        if isinstance(resp, RoomSendError):
+            raise MessageSendError(f"Senden an {room_id} abgelehnt: {resp.message} ({resp.status_code})")
 
     async def send_image(self, room_id: str, image_path: str, filename: str | None = None) -> None:
         """Upload and send an image to a Matrix room.

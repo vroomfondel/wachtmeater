@@ -83,7 +83,8 @@ class Replay:
 
     def command(self, idx: int, text: str, offset: float = 60.0) -> str | None:
         with patch.object(mw, "_now", return_value=_t(idx) + offset), patch.object(mw, "save_state"):
-            return mw.handle_command(text, self.state)
+            reply: str | None = mw.handle_command(text, self.state)
+        return reply
 
     def run(self, until: int, commands: dict[int, list[str]] | None = None) -> None:
         commands = commands or {}
@@ -179,8 +180,9 @@ def test_resume_ends_pause_early() -> None:
     assert r.state.pause_until is not None
     reply = r.command(36, "resume", offset=300)
     assert reply is not None and "Pause beendet" in reply
-    assert r.state.pause_until is None
-    assert r.state.max_ambient_temp is None  # re-seeded by the next check
+    state = r.state.to_dict()  # fresh read; mypy keeps the narrowed attribute
+    assert state["pause_until"] is None
+    assert state["max_ambient_temp"] is None  # re-seeded by the next check
 
 
 def test_offline_cycle_posts_once_without_call_then_recovers() -> None:
@@ -215,10 +217,15 @@ def test_alert_message_send_failure_is_retried_and_not_marked() -> None:
     r.run(30)
     failing = MagicMock(side_effect=RuntimeError("M_LIMIT_EXCEEDED"))
     calls: list[str] = []
+
+    def _call(text: str) -> bool:
+        calls.append(text)
+        return True
+
     with (
         patch.object(mw, "_now", return_value=_t(30)),
         patch.object(mw, "get_meater_data", return_value=r._data(30)),
-        patch.object(mw, "call_pitmaster", side_effect=lambda t: calls.append(t) or True),
+        patch.object(mw, "call_pitmaster", side_effect=_call),
         patch.object(mw, "save_state"),
     ):
         mw.run_meater_check(r.state, send=failing)
