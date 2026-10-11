@@ -104,7 +104,7 @@ Environment variable reference
 
 import json
 import os
-from dataclasses import Field, asdict, dataclass, field, fields
+from dataclasses import Field, dataclass, field, fields, is_dataclass
 from typing import Any, ClassVar, Self, TypeVar, dataclass_transform, overload
 
 
@@ -546,92 +546,6 @@ class AlertDefaultsConfig(_EnvMixin):
     tempalert_station_offline_enabled: bool = env("ALERT_DEFAULT_STATION_OFFLINE_ENABLED", default=True)
 
 
-@dataclass
-class WatcherState:
-    """Per-cook persistent state (serialized to JSON)."""
-
-    # Temperature tracking
-    last_internal_temp: float | None = None
-    last_ambient_temp: float | None = None
-    max_ambient_temp: float | None = None
-    max_internal_temp: float | None = None
-    last_check: str | None = None
-    target_reached_calls: int = 0
-    # Timestamped readings ``[epoch_seconds, temp_c]`` for the time-based
-    # stall detection, disturbance detection and the ETA forecast.
-    internal_samples: list[list[float]] = field(default_factory=list)
-    ambient_samples: list[list[float]] = field(default_factory=list)
-    # Samples at or before this epoch are ignored for trend evaluation (stall
-    # rate, ETA forecast) — set after a disturbance or a pause so the dip
-    # does not count.
-    trend_ignore_before: float | None = None
-    consecutive_errors: int = 0
-    # Alert modes
-    tempalert_tempdown_enabled: bool = True
-    tempalert_ruhephase_enabled: bool = False
-    ruhephase_target_temp: float | None = None
-    tempalert_stall_enabled: bool = False
-    stall_max_rate: float = 4.0
-    stall_alerted: bool = False
-    # Checks left to skip stall evaluation after a disturbance
-    stall_pause_checks_left: int = 0
-    tempalert_wrap_enabled: bool = False
-    wrap_target_temp: float | None = None
-    wrap_alerted: bool = False
-    tempalert_ambient_range_enabled: bool = False
-    ambient_range_min: float | None = None
-    ambient_range_max: float | None = None
-    tempalert_cookend_enabled: bool = True
-    cook_ended: bool = False
-    matrix_room_id: str | None = None
-    # Station offline detection
-    tempalert_station_offline_enabled: bool = True
-    offline_streak: int = 0
-    station_offline_call_sent: bool = False
-    offline_notified: bool = False
-    # Keys of one-shot alerts whose SIP call already went out while the
-    # Matrix message is still pending (prevents repeated calls on retry)
-    alert_calls_sent: list[str] = field(default_factory=list)
-    # ``pause`` / ``wrapped``: epoch until which TempDown, stall and the
-    # ambient range alert are muted (None = not paused)
-    pause_until: float | None = None
-    # Epoch of the ``wrapped`` command — anchors the end-phase forecast fit
-    wrapped_at: float | None = None
-    # Per-cook real smoker temperature in C (None = config ``pit_temp``)
-    pit_temp: float | None = None
-    # Startup behaviour
-    startup_test_call_enabled: bool = True
-    # Per-cook check-interval override in seconds (None = use config default)
-    check_interval_override: int | None = None
-    # User-defined "pull / take out now" core-temp target in C that overrides
-    # the MEATER target for the target-reached alert (None = use MEATER target)
-    target_override: float | None = None
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "WatcherState":
-        """Construct a ``WatcherState`` from a plain dictionary.
-
-        Unknown keys (e.g. from an older state file format) are silently
-        ignored.
-
-        Args:
-            d: Dictionary, typically loaded from the JSON state file.
-
-        Returns:
-            A new ``WatcherState`` populated with the known keys from *d*.
-        """
-        known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in d.items() if k in known})
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize this state to a plain dictionary for JSON persistence.
-
-        Returns:
-            A dict representation of all fields (via ``dataclasses.asdict``).
-        """
-        return asdict(self)
-
-
 # ---------------------------------------------------------------------------
 # Root config
 # ---------------------------------------------------------------------------
@@ -678,6 +592,33 @@ class WachtmeaterConfig:
             k8s=K8sConfig.from_environ(),
             alerts=AlertDefaultsConfig.from_environ(),
         )
+
+    def reload_from_environ(self) -> None:
+        """Re-read ``os.environ`` into this instance **in place**.
+
+        Modules bind the config with ``from wachtmeater import cfg``; that
+        name keeps pointing at the object that existed at import time.
+        Replacing the global with a new instance would leave such modules
+        (and tests patching ``cfg.<section>``) on a stale copy, depending on
+        import order.  Updating in place keeps one shared object — including
+        the section objects, so ``cfg.monitoring`` references stay valid too.
+        """
+        _update_in_place(self, self.from_environ())
+
+
+def _update_in_place(target: object, source: object) -> None:
+    """Copy all dataclass fields of *source* into *target*, recursing into sections.
+
+    Args:
+        target: Dataclass instance to update.
+        source: Dataclass instance of the same type with the new values.
+    """
+    for f in fields(target):  # type: ignore[arg-type]
+        old, new = getattr(target, f.name), getattr(source, f.name)
+        if is_dataclass(old) and not isinstance(old, type) and type(old) is type(new):
+            _update_in_place(old, new)
+        else:
+            setattr(target, f.name, new)
 
 
 SECTION_REGISTRY: dict[str, type[_EnvMixin]] = {

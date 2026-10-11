@@ -4,7 +4,7 @@ Provides shared logging configuration, environment loading, and a startup
 banner used by all wachtmeater sub-commands.
 """
 
-__version__ = "0.0.18"
+__version__ = "0.0.19"
 
 import json
 import logging
@@ -191,10 +191,10 @@ def read_dot_env_to_environ() -> None:
     Existing environment variables are **not** overridden (uses
     ``os.environ.setdefault``).
 
-    After loading, constructs the typed ``cfg`` global from ``os.environ``.
+    After loading, refreshes the typed ``cfg`` from ``os.environ`` — in
+    place, so every ``from wachtmeater import cfg`` reference sees the new
+    values (see ``WachtmeaterConfig.reload_from_environ``).
     """
-    global cfg
-
     cf: str | None = os.environ.get("CONFIG")
 
     if cf and Path(cf).is_file():
@@ -224,4 +224,4 @@ def read_dot_env_to_environ() -> None:
                 else:
                     _load_flat_env_file(_env_file)
 
-    cfg = WachtmeaterConfig.from_environ()
+    cfg.reload_from_environ()

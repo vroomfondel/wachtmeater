@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from wachtmeater.config import WatcherState
+from wachtmeater.watcher_state import WatcherState
 
 # The reference cooks (Element exports, replays) were recorded in Berlin, and
 # the expected wall-clock strings ("08:01", "~14:49") are Berlin local time.

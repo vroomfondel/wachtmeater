@@ -111,6 +111,11 @@ F_SCALE_MIN: float = 0.05
 """Lower bound of the Huber threshold in C.  The MEATER reports 0.1 C steps;
 on a near-perfect fit the MAD would otherwise shrink to ~0 and every reading
 would count as an outlier."""
+LAST_DEVIATION_SIGMAS: float = 3.0
+"""The last reading counts as off the curve beyond this many robust standard
+deviations of the fit residuals (Hampel identifier) ..."""
+LAST_DEVIATION_MIN: float = 0.3
+"""... and at least this many C (three sensor steps of 0.1 C)."""
 _FREE_A_STARTS: tuple[float, ...] = (0.1, 0.5, 0.9)
 """Start values of the free fit as fractions of the ``A`` range."""
 
@@ -163,7 +168,20 @@ class ExpFit:
         c: Rate constant in 1/h.
         rms: Root-mean-square residual in C.
         eta_hours: Hours from the last reading until the target is reached
-            (``None`` if ``A`` does not exceed the target or the current core).
+            (``None`` if ``A`` does not exceed the target).  Starts from the
+            measured value — it partly corrects the model error of a fixed
+            ``A`` (backtest 26./27.09.: from the curve value the fixed
+            variants were 8-17 min worse).  Only if the last reading is an
+            outlier (``last_deviates``) it starts from the curve value
+            instead, so one glitch does not move the ETA by most of an hour.
+        core_model: Curve value at the last reading in C.
+        core_measured: Last measured core temperature in C.
+        eta_hours_measured: ETA from the measured value (equals
+            ``eta_hours`` unless ``last_deviates``).
+        last_deviates: ``True`` if the last reading is clearly off the curve
+            (Hampel identifier: ``LAST_DEVIATION_SIGMAS`` robust standard
+            deviations of the residuals, at least ``LAST_DEVIATION_MIN``); the
+            reports then show ``eta_hours_measured`` as a hint.
         ambient_stderr: Standard error of ``A`` (free fit only).
         fixed: ``True`` when ``A`` was given, ``False`` for the free fit.
     """
@@ -172,6 +190,10 @@ class ExpFit:
     c: float
     rms: float
     eta_hours: float | None
+    core_model: float
+    core_measured: float
+    eta_hours_measured: float | None
+    last_deviates: bool
     ambient_stderr: float | None = None
     fixed: bool = True
 
@@ -360,6 +382,52 @@ def _solve(
     )
 
 
+def _exp_fit(
+    ambient: float,
+    c: float,
+    residuals: FloatArray,
+    core: Sequence[float],
+    target: float,
+    ambient_stderr: float | None = None,
+    fixed: bool = True,
+) -> ExpFit:
+    """Build an ``ExpFit`` from a solved fit.
+
+    The ETA starts from the measured last reading, unless that reading is an
+    outlier (Hampel identifier on the last residual against the MAD of all
+    residuals): then it starts from the curve value, and the ETA from the
+    measured value is kept as a hint.
+
+    Args:
+        ambient: ``A`` in C.
+        c: Rate constant in 1/h.
+        residuals: ``model - measured`` per reading at the solution.
+        core: Measured core temperatures.
+        target: Target core temperature.
+        ambient_stderr: Standard error of ``A`` (free fit only).
+        fixed: ``True`` when ``A`` was given.
+
+    Returns:
+        The fit.
+    """
+    measured = float(core[-1])
+    model_now = measured + float(residuals[-1])
+    sigma = MAD_TO_SIGMA * float(np.median(np.abs(residuals)))
+    deviates = abs(float(residuals[-1])) > max(LAST_DEVIATION_MIN, LAST_DEVIATION_SIGMAS * sigma)
+    return ExpFit(
+        ambient=ambient,
+        c=c,
+        rms=math.sqrt(float(np.mean(residuals**2))),
+        eta_hours=eta_hours(ambient, c, model_now if deviates else measured, target),
+        core_model=model_now,
+        core_measured=measured,
+        eta_hours_measured=eta_hours(ambient, c, measured, target),
+        last_deviates=deviates,
+        ambient_stderr=ambient_stderr,
+        fixed=fixed,
+    )
+
+
 def fit_fixed_ambient(
     t_h: Sequence[float], core: Sequence[float], ambient: float, target: float, loss: Loss = FIT_LOSS
 ) -> ExpFit:
@@ -384,9 +452,7 @@ def fit_fixed_ambient(
 
     x0 = [float(k[0]), _c_guess(t, k, ambient, _C_BOUNDS_FIXED)]
     res = _solve(_res, [x0], [-np.inf, _C_BOUNDS_FIXED[0]], [np.inf, _C_BOUNDS_FIXED[1]], loss)
-    c = float(res.x[1])
-    rms = math.sqrt(float(np.mean(_res(res.x) ** 2)))
-    return ExpFit(ambient=ambient, c=c, rms=rms, eta_hours=eta_hours(ambient, c, core[-1], target))
+    return _exp_fit(ambient, float(res.x[1]), _res(res.x), core, target)
 
 
 def fit_free_ambient(
@@ -421,14 +487,8 @@ def fit_free_ambient(
         a0 = lo + frac * (pit - lo)
         starts.append([a0, float(k[0]), _c_guess(t, k, a0, _C_BOUNDS_FREE)])
     res = _solve(_res, starts, [lo, -np.inf, _C_BOUNDS_FREE[0]], [pit, np.inf, _C_BOUNDS_FREE[1]], loss)
-    ambient, c = float(res.x[0]), float(res.x[2])
-    return ExpFit(
-        ambient=ambient,
-        c=c,
-        rms=math.sqrt(float(np.mean(_res(res.x) ** 2))),
-        eta_hours=eta_hours(ambient, c, core[-1], target),
-        ambient_stderr=_ambient_stderr(res, n),
-        fixed=False,
+    return _exp_fit(
+        float(res.x[0]), float(res.x[2]), _res(res.x), core, target, ambient_stderr=_ambient_stderr(res, n), fixed=False
     )
 
 
@@ -730,12 +790,25 @@ def format_report(fc: Forecast) -> str:
         f"{_hm(fc.linear.eta_hours) if fc.linear.eta_hours is not None else 'nicht absehbar (kein Anstieg)'}"
         f"  (früheste Ankunft)",
     ]
+
+    def _measured(f: ExpFit) -> str:
+        return f"  [ab Messwert: {_hm(f.eta_hours_measured)}]" if f.last_deviates else ""
+
     for f in fc.fixed:
         tag = "  <- A = Pit (schnellste Exp.-Variante)" if f.ambient == fc.pit else ""
-        lines.append(f"A={f.ambient:5.1f} °C : c={f.c:.3f}/h rms={f.rms:.3f} -> {_hm(f.eta_hours)}{tag}")
+        lines.append(f"A={f.ambient:5.1f} °C : c={f.c:.3f}/h rms={f.rms:.3f} -> {_hm(f.eta_hours)}{tag}{_measured(f)}")
     if fc.free is not None:
         err = f"±{fc.free.ambient_stderr:.1f}" if fc.free.ambient_stderr is not None else ""
-        lines.append(f"A frei (≤Pit): A={fc.free.ambient:.1f}{err} °C c={fc.free.c:.3f}/h -> {_hm(fc.free.eta_hours)}")
+        lines.append(
+            f"A frei (≤Pit): A={fc.free.ambient:.1f}{err} °C c={fc.free.c:.3f}/h -> {_hm(fc.free.eta_hours)}"
+            f"{_measured(fc.free)}"
+        )
     else:
         lines.append("A frei (≤Pit): nicht bestimmbar")
+    deviating = next((f for f in [*fc.fixed, fc.free] if f is not None and f.last_deviates), None)
+    if deviating is not None:
+        lines.append(
+            f"Hinweis: letzter Messwert {deviating.core_measured:.1f} °C weicht von der Kurve "
+            f"({deviating.core_model:.1f} °C) ab (Ausreißer?); ETAs ab Kurvenwert, [ab Messwert] zum Vergleich"
+        )
     return "\n".join(lines)

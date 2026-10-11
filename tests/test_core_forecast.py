@@ -128,6 +128,30 @@ def test_first_reading_outlier_barely_shifts_eta(loss: cf.Loss, limit: float) ->
         assert abs(bad_fit.eta_hours - good_fit.eta_hours) * 60 < limit
 
 
+def test_clean_data_eta_from_measured_value(fc_robust: cf.Forecast) -> None:
+    for fit in [*fc_robust.fixed, fc_robust.free]:
+        assert fit is not None and not fit.last_deviates
+        assert fit.eta_hours == fit.eta_hours_measured
+    assert "Hinweis" not in cf.format_report(fc_robust)
+
+
+def test_last_reading_outlier_uses_curve_value(fc_robust: cf.Forecast) -> None:
+    # A -1 C glitch in the newest reading moves the ETA by 32-42 min from the
+    # measured value, by 6-12 min from the curve value (Huber still lets the
+    # point pull c a little).
+    bad = cf.forecast(_with_glitch(len(READINGS) - 1), target=96.5, pit=110.0)
+    for good_fit, bad_fit in zip(fc_robust.fixed, bad.fixed):
+        assert bad_fit.last_deviates
+        assert bad_fit.core_measured == pytest.approx(READINGS[-1][1] - 1.0)
+        assert good_fit.eta_hours is not None and bad_fit.eta_hours is not None
+        assert bad_fit.eta_hours_measured is not None
+        assert abs(bad_fit.eta_hours - good_fit.eta_hours) * 60 < 15
+        assert abs(bad_fit.eta_hours_measured - good_fit.eta_hours) * 60 > 25
+    report = cf.format_report(bad)
+    assert "[ab Messwert: " in report
+    assert "Hinweis: letzter Messwert 88.8 °C weicht von der Kurve" in report
+
+
 def test_robust_fit_ignores_mid_window_glitch(fc_robust: cf.Forecast) -> None:
     bad = cf.forecast(_with_glitch(7, -2.0), target=96.5, pit=110.0)
     for good_fit, bad_fit in zip(fc_robust.fixed, bad.fixed):

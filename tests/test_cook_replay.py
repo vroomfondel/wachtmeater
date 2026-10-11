@@ -11,7 +11,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from wachtmeater.config import WatcherState
+from wachtmeater.watcher_state import WatcherState
+
+from wachtmeater import alerting, commands, timeutil, watcher_state
 
 mw = pytest.importorskip("wachtmeater.meater_watcher")
 
@@ -82,8 +84,8 @@ class Replay:
         }
 
     def command(self, idx: int, text: str, offset: float = 60.0) -> str | None:
-        with patch.object(mw, "_now", return_value=_t(idx) + offset), patch.object(mw, "save_state"):
-            reply: str | None = mw.handle_command(text, self.state)
+        with patch.object(timeutil, "now", return_value=_t(idx) + offset), patch.object(watcher_state, "save_state"):
+            reply: str | None = commands.handle_command(text, self.state)
         return reply
 
     def run(self, until: int, commands: dict[int, list[str]] | None = None) -> None:
@@ -99,10 +101,10 @@ class Replay:
                 return True
 
             with (
-                patch.object(mw, "_now", return_value=_t(idx)),
+                patch.object(timeutil, "now", return_value=_t(idx)),
                 patch.object(mw, "get_meater_data", return_value=self._data(idx)),
-                patch.object(mw, "call_pitmaster", side_effect=_call),
-                patch.object(mw, "save_state"),
+                patch.object(alerting, "call_pitmaster", side_effect=_call),
+                patch.object(watcher_state, "save_state"),
             ):
                 self.status[idx] = mw.run_meater_check(self.state, send=_send)
             for cmd in commands.get(idx, []):
@@ -223,10 +225,10 @@ def test_alert_message_send_failure_is_retried_and_not_marked() -> None:
         return True
 
     with (
-        patch.object(mw, "_now", return_value=_t(30)),
+        patch.object(timeutil, "now", return_value=_t(30)),
         patch.object(mw, "get_meater_data", return_value=r._data(30)),
-        patch.object(mw, "call_pitmaster", side_effect=_call),
-        patch.object(mw, "save_state"),
+        patch.object(alerting, "call_pitmaster", side_effect=_call),
+        patch.object(watcher_state, "save_state"),
     ):
         mw.run_meater_check(r.state, send=failing)
     assert r.state.wrap_alerted is False

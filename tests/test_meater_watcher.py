@@ -1,4 +1,4 @@
-"""Tests for wachtmeater/meater_watcher.py.
+"""Tests for the watcher (wachtmeater/meater_watcher.py and the modules split off from it).
 
 Requires minimatrix (imported at module level by meater_watcher).
 """
@@ -13,7 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from wachtmeater.config import AlertDefaultsConfig, WatcherState
+from wachtmeater.config import AlertDefaultsConfig
+from wachtmeater.watcher_state import WatcherState
+
+from wachtmeater import alerting, commands, signal_stats, status_text, timeutil, watcher_settings, watcher_state
 
 mw = pytest.importorskip("wachtmeater.meater_watcher")
 
@@ -29,15 +32,15 @@ def _field(state: WatcherState, name: str) -> object:
 
 
 # ============================================================================
-# _alert_summary
+# alert_summary
 # ============================================================================
 
 
 class TestAlertSummary:
-    """Tests for _alert_summary(state)."""
+    """Tests for status_text.alert_summary(state)."""
 
     def test_defaults(self, base_state: WatcherState) -> None:
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         # tempdown ON, cookend ON, rest OFF
         assert any("TempDown: AN" in l for l in lines)
         assert any("Cook-Ende: AN" in l for l in lines)
@@ -45,93 +48,93 @@ class TestAlertSummary:
 
     def test_tempdown_disabled(self, base_state: WatcherState) -> None:
         base_state.tempalert_tempdown_enabled = False
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("TempDown: AUS" in l for l in lines)
 
     def test_ruhephase_enabled_with_target(self, base_state: WatcherState) -> None:
         base_state.tempalert_ruhephase_enabled = True
         base_state.ruhephase_target_temp = 55.0
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Ruhephase: AN" in l and "55" in l for l in lines)
 
     def test_ruhephase_enabled_no_target(self, base_state: WatcherState) -> None:
         base_state.tempalert_ruhephase_enabled = True
         base_state.ruhephase_target_temp = None
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Ruhephase: AUS" in l for l in lines)
 
     def test_stall_enabled(self, base_state: WatcherState) -> None:
         base_state.tempalert_stall_enabled = True
         base_state.stall_max_rate = 2.0
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Stall: AN" in l and "< 2 C/h" in l for l in lines)
 
     def test_stall_already_alerted(self, base_state: WatcherState) -> None:
         base_state.tempalert_stall_enabled = True
         base_state.stall_alerted = True
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("bereits ausgeloest" in l for l in lines)
 
     def test_wrap_enabled(self, base_state: WatcherState) -> None:
         base_state.tempalert_wrap_enabled = True
         base_state.wrap_target_temp = 75.0
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Wrap-Reminder: AN" in l and "75" in l for l in lines)
 
     def test_wrap_already_alerted(self, base_state: WatcherState) -> None:
         base_state.tempalert_wrap_enabled = True
         base_state.wrap_target_temp = 75.0
         base_state.wrap_alerted = True
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("bereits ausgeloest" in l for l in lines)
 
     def test_cookend_ended(self, base_state: WatcherState) -> None:
         base_state.tempalert_cookend_enabled = True
         base_state.cook_ended = True
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Cook beendet erkannt" in l for l in lines)
 
     def test_ambient_range_enabled(self, base_state: WatcherState) -> None:
         base_state.tempalert_ambient_range_enabled = True
         base_state.ambient_range_min = 100.0
         base_state.ambient_range_max = 130.0
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Ambient-Bereich: AN" in l and "100" in l and "130" in l for l in lines)
 
     def test_startup_test_call_enabled(self, base_state: WatcherState) -> None:
         base_state.startup_test_call_enabled = True
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Startup-Testanruf: AN" in l for l in lines)
 
     def test_startup_test_call_disabled(self, base_state: WatcherState) -> None:
         base_state.startup_test_call_enabled = False
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Startup-Testanruf: AUS" in l for l in lines)
 
     def test_check_interval_default(self, base_state: WatcherState) -> None:
         base_state.check_interval_override = None
-        lines = mw._alert_summary(base_state)
-        assert any(l == f"Check-Intervall: {mw.CHECK_INTERVAL}s" for l in lines)
+        lines = status_text.alert_summary(base_state)
+        assert any(l == f"Check-Intervall: {watcher_settings.CHECK_INTERVAL}s" for l in lines)
 
     def test_check_interval_override(self, base_state: WatcherState) -> None:
         base_state.check_interval_override = 45
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Check-Intervall: 45s (override" in l for l in lines)
 
     def test_pull_override_off(self, base_state: WatcherState) -> None:
         base_state.target_override = None
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any(l == "Pull-Alert (rausnehmen): AUS" for l in lines)
 
     def test_pull_override_on(self, base_state: WatcherState) -> None:
         base_state.target_override = 90.0
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Pull-Alert (rausnehmen): AN" in l and "90" in l for l in lines)
 
     def test_pull_override_already_fired(self, base_state: WatcherState) -> None:
         base_state.target_override = 90.0
         base_state.target_reached_calls = 3
-        lines = mw._alert_summary(base_state)
+        lines = status_text.alert_summary(base_state)
         assert any("Pull-Alert" in l and "bereits ausgeloest" in l for l in lines)
 
 
@@ -143,476 +146,476 @@ class TestAlertSummary:
 class TestHandleCommand:
     """Tests for handle_command(body, state)."""
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_help(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("help", base_state) == mw.HELP_TEXT
+        assert commands.handle_command("help", base_state) == commands.HELP_TEXT
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_hilfe(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("hilfe", base_state) == mw.HELP_TEXT
+        assert commands.handle_command("hilfe", base_state) == commands.HELP_TEXT
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_question_mark(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("?", base_state) == mw.HELP_TEXT
+        assert commands.handle_command("?", base_state) == commands.HELP_TEXT
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_status(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("status", base_state) == "__status__"
+        assert commands.handle_command("status", base_state) == "__status__"
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_slash_help(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("/help", base_state) == mw.HELP_TEXT
-        assert mw.handle_command("/hilfe", base_state) == mw.HELP_TEXT
+        assert commands.handle_command("/help", base_state) == commands.HELP_TEXT
+        assert commands.handle_command("/hilfe", base_state) == commands.HELP_TEXT
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_eta(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("eta", base_state) == "__eta__"
-        assert mw.handle_command("ETA", base_state) == "__eta__"
-        assert mw.handle_command("restzeit", base_state) == "__eta__"
+        assert commands.handle_command("eta", base_state) == "__eta__"
+        assert commands.handle_command("ETA", base_state) == "__eta__"
+        assert commands.handle_command("restzeit", base_state) == "__eta__"
 
     def test_eta_listed_in_help(self) -> None:
-        assert "eta" in mw.HELP_TEXT
-        assert "/help" in mw.HELP_TEXT
+        assert "eta" in commands.HELP_TEXT
+        assert "/help" in commands.HELP_TEXT
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_testcall_default(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("testcall", base_state)
+        result = commands.handle_command("testcall", base_state)
         assert result == "__testcall__\nWachtmeater Testanruf"
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_testcall_with_text_preserves_case(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("testcall Hallo Klaus, das Brisket ist Fertig!", base_state)
+        result = commands.handle_command("testcall Hallo Klaus, das Brisket ist Fertig!", base_state)
         assert result == "__testcall__\nHallo Klaus, das Brisket ist Fertig!"
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_testcall_uppercase_keyword_still_matches(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("TestCall Probealarm", base_state)
+        result = commands.handle_command("TestCall Probealarm", base_state)
         assert result == "__testcall__\nProbealarm"
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_testcall_strips_surrounding_whitespace(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("  testcall   foo bar  ", base_state)
+        result = commands.handle_command("  testcall   foo bar  ", base_state)
         assert result == "__testcall__\nfoo bar"
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_stop(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("stop", base_state) == "__stop__"
+        assert commands.handle_command("stop", base_state) == "__stop__"
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_quit(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("quit", base_state) == "__stop__"
+        assert commands.handle_command("quit", base_state) == "__stop__"
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_beenden(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("beenden", base_state) == "__stop__"
+        assert commands.handle_command("beenden", base_state) == "__stop__"
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_exit(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("exit", base_state) == "__stop__"
+        assert commands.handle_command("exit", base_state) == "__stop__"
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_set_interval(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("set interval 120", base_state)
+        result = commands.handle_command("set interval 120", base_state)
         assert base_state.check_interval_override == 120
         assert result is not None and "gesetzt" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_set_interval_bare_keyword(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("interval 300", base_state) is not None
+        assert commands.handle_command("interval 300", base_state) is not None
         assert base_state.check_interval_override == 300
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_set_interval_below_minimum_rejected(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.check_interval_override = 120
-        result = mw.handle_command(f"set interval {mw.MIN_CHECK_INTERVAL - 1}", base_state)
+        result = commands.handle_command(f"set interval {watcher_settings.MIN_CHECK_INTERVAL - 1}", base_state)
         assert result is not None and "mindestens" in result
         assert base_state.check_interval_override == 120  # unchanged
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_reset_interval(self, _save: MagicMock, base_state: WatcherState) -> None:
-        mw.handle_command("set interval 99", base_state)  # establish an override first
-        result = mw.handle_command("reset interval", base_state)
+        commands.handle_command("set interval 99", base_state)  # establish an override first
+        result = commands.handle_command("reset interval", base_state)
         assert result is not None and "Standard" in result
         assert base_state.check_interval_override is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_set_interval_non_numeric_is_not_a_command(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("set interval abc", base_state) is None
+        assert commands.handle_command("set interval abc", base_state) is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_disable_startcall(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.startup_test_call_enabled = True
-        result = mw.handle_command("disable startcall", base_state)
+        result = commands.handle_command("disable startcall", base_state)
         assert base_state.startup_test_call_enabled is False
         assert result is not None and "deaktiviert" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_startcall(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.startup_test_call_enabled = False
-        result = mw.handle_command("enable startcall", base_state)
+        result = commands.handle_command("enable startcall", base_state)
         assert base_state.startup_test_call_enabled is True
         assert result is not None and "aktiviert" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_startcall_german_alias(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.startup_test_call_enabled = True
-        assert mw.handle_command("startcall aus", base_state) is not None
+        assert commands.handle_command("startcall aus", base_state) is not None
         assert base_state.startup_test_call_enabled is False
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_startcall_does_not_shadow_manual_testcall(self, _save: MagicMock, base_state: WatcherState) -> None:
         # The manual "testcall" command must still trigger a call, not be
         # confused with the startup-testcall toggle.
-        result = mw.handle_command("testcall", base_state)
+        result = commands.handle_command("testcall", base_state)
         assert result == "__testcall__\nWachtmeater Testanruf"
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_tempdown(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.tempalert_tempdown_enabled = False
-        result = mw.handle_command("enable tempdown", base_state)
+        result = commands.handle_command("enable tempdown", base_state)
         assert base_state.tempalert_tempdown_enabled is True
         assert result is not None and "aktiviert" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_disable_tempdown(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("disable tempdown", base_state)
+        result = commands.handle_command("disable tempdown", base_state)
         assert base_state.tempalert_tempdown_enabled is False
         assert result is not None and "deaktiviert" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_ruhephase(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("enable ruhephase 55", base_state)
+        result = commands.handle_command("enable ruhephase 55", base_state)
         assert base_state.tempalert_ruhephase_enabled is True
         assert base_state.ruhephase_target_temp == 55.0
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_ruhephase_disables_tempdown(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.tempalert_tempdown_enabled = True
-        result = mw.handle_command("enable ruhephase 55", base_state)
+        result = commands.handle_command("enable ruhephase 55", base_state)
         assert base_state.tempalert_tempdown_enabled is False
         assert result is not None and "TempDown" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_ruhephase_tempdown_already_off(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.tempalert_tempdown_enabled = False
-        result = mw.handle_command("ruhephase an 55", base_state)
+        result = commands.handle_command("ruhephase an 55", base_state)
         assert base_state.tempalert_ruhephase_enabled is True
         assert base_state.tempalert_tempdown_enabled is False
         # No coupling note when there was nothing to switch off.
         assert result is not None and "TempDown" not in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_disable_ruhephase_leaves_tempdown_untouched(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.tempalert_tempdown_enabled = False
-        mw.handle_command("disable ruhephase", base_state)
+        commands.handle_command("disable ruhephase", base_state)
         assert base_state.tempalert_tempdown_enabled is False
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_disable_ruhephase(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("disable ruhephase", base_state)
+        result = commands.handle_command("disable ruhephase", base_state)
         assert base_state.tempalert_ruhephase_enabled is False
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_stall_default_rate(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("enable stall", base_state)
+        result = commands.handle_command("enable stall", base_state)
         assert base_state.tempalert_stall_enabled is True
         assert base_state.stall_max_rate == mw.cfg.alerts.stall_max_rate
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_stall_custom_rate(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("enable stall 2.5", base_state)
+        result = commands.handle_command("enable stall 2.5", base_state)
         assert base_state.stall_max_rate == 2.5
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_disable_stall(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("disable stall", base_state)
+        result = commands.handle_command("disable stall", base_state)
         assert base_state.tempalert_stall_enabled is False
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_wrap(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("enable wrap 75", base_state)
+        result = commands.handle_command("enable wrap 75", base_state)
         assert base_state.tempalert_wrap_enabled is True
         assert base_state.wrap_target_temp == 75.0
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_disable_wrap(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("disable wrap", base_state)
+        result = commands.handle_command("disable wrap", base_state)
         assert base_state.tempalert_wrap_enabled is False
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_pull(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.target_reached_calls = 3  # previously fired
-        result = mw.handle_command("enable pull 88", base_state)
+        result = commands.handle_command("enable pull 88", base_state)
         assert base_state.target_override == 88.0
         assert base_state.target_reached_calls == 0  # re-armed
         assert result is not None and "Pull-Alert aktiviert" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_pull_german_alias(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("rausnehmen 91.5", base_state) is not None
+        assert commands.handle_command("rausnehmen 91.5", base_state) is not None
         assert base_state.target_override == 91.5
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_disable_pull(self, _save: MagicMock, base_state: WatcherState) -> None:
-        mw.handle_command("enable pull 88", base_state)  # establish an override first
-        result = mw.handle_command("disable pull", base_state)
+        commands.handle_command("enable pull 88", base_state)  # establish an override first
+        result = commands.handle_command("disable pull", base_state)
         assert result is not None and "deaktiviert" in result
         assert base_state.target_override is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_pull_without_temp_is_not_a_command(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("enable pull", base_state) is None
+        assert commands.handle_command("enable pull", base_state) is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_ambient(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("enable ambient 100 130", base_state)
+        result = commands.handle_command("enable ambient 100 130", base_state)
         assert base_state.tempalert_ambient_range_enabled is True
         assert base_state.ambient_range_min == 100.0
         assert base_state.ambient_range_max == 130.0
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_ambient_lo_ge_hi_error(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("enable ambient 130 100", base_state)
+        result = commands.handle_command("enable ambient 130 100", base_state)
         assert result is not None and "Fehler" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_disable_ambient(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("disable ambient", base_state)
+        result = commands.handle_command("disable ambient", base_state)
         assert base_state.tempalert_ambient_range_enabled is False
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_enable_cookend(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("enable cookend", base_state)
+        result = commands.handle_command("enable cookend", base_state)
         assert base_state.tempalert_cookend_enabled is True
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_disable_cookend(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("disable cookend", base_state)
+        result = commands.handle_command("disable cookend", base_state)
         assert base_state.tempalert_cookend_enabled is False
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_reset_stall(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.stall_alerted = True
-        result = mw.handle_command("reset stall", base_state)
+        result = commands.handle_command("reset stall", base_state)
         assert base_state.stall_alerted is False
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_reset_wrap(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.wrap_alerted = True
-        result = mw.handle_command("reset wrap", base_state)
+        result = commands.handle_command("reset wrap", base_state)
         assert base_state.wrap_alerted is False
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_reset_ambient(self, _save: MagicMock, cooking_state: WatcherState) -> None:
-        result = mw.handle_command("reset ambient", cooking_state)
+        result = commands.handle_command("reset ambient", cooking_state)
         assert cooking_state.max_ambient_temp is None
         assert result is not None
         assert "120.0" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_reset_ambient_when_unset(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.max_ambient_temp = None
-        result = mw.handle_command("reset ambient", base_state)
+        result = commands.handle_command("reset ambient", base_state)
         assert base_state.max_ambient_temp is None
         assert result is not None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_reset_ambient_aliases(self, _save: MagicMock, cooking_state: WatcherState) -> None:
         for alias in ("reset maxambient", "reset max ambient", "reset ambient max", "ambient reset"):
             cooking_state.max_ambient_temp = 120.0
-            assert mw.handle_command(alias, cooking_state) is not None
+            assert commands.handle_command(alias, cooking_state) is not None
             assert cooking_state.max_ambient_temp is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_reset_ambient_keeps_range_alert(self, _save: MagicMock, cooking_state: WatcherState) -> None:
         # Resetting the high-water mark must not touch the ambient range alert.
         cooking_state.tempalert_ambient_range_enabled = True
         cooking_state.ambient_range_min = 100.0
         cooking_state.ambient_range_max = 140.0
-        mw.handle_command("reset ambient", cooking_state)
+        commands.handle_command("reset ambient", cooking_state)
         assert cooking_state.tempalert_ambient_range_enabled is True
         assert cooking_state.ambient_range_min == 100.0
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_pause_default_minutes(self, _save: MagicMock, base_state: WatcherState) -> None:
-        with patch.object(mw, "_now", return_value=1000.0):
-            result = mw.handle_command("Pause", base_state)
-        assert base_state.pause_until == 1000.0 + mw.PAUSE_DEFAULT_MINUTES * 60
+        with patch.object(timeutil, "now", return_value=1000.0):
+            result = commands.handle_command("Pause", base_state)
+        assert base_state.pause_until == 1000.0 + watcher_settings.PAUSE_DEFAULT_MINUTES * 60
         assert result is not None and "resume" in result
         assert base_state.wrap_alerted is False
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_pause_custom_minutes(self, _save: MagicMock, base_state: WatcherState) -> None:
-        with patch.object(mw, "_now", return_value=1000.0):
-            mw.handle_command("pause 5", base_state)
+        with patch.object(timeutil, "now", return_value=1000.0):
+            commands.handle_command("pause 5", base_state)
         assert base_state.pause_until == 1300.0
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_pause_zero_rejected(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("pause 0", base_state)
+        result = commands.handle_command("pause 0", base_state)
         assert result is not None and result.startswith("Fehler")
         assert base_state.pause_until is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_wrapped_pauses_and_marks_wrap_done(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.alert_calls_sent = ["wrap"]
-        with patch.object(mw, "_now", return_value=1000.0):
-            result = mw.handle_command("wrapped 30", base_state)
+        with patch.object(timeutil, "now", return_value=1000.0):
+            result = commands.handle_command("wrapped 30", base_state)
         assert base_state.pause_until == 1000.0 + 30 * 60
         assert base_state.wrap_alerted is True
         assert base_state.alert_calls_sent == []
         assert result is not None and "Wrap als erledigt" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_wrapped_without_minutes_only_sets_status(self, _save: MagicMock, base_state: WatcherState) -> None:
-        with patch.object(mw, "_now", return_value=1000.0):
-            result = mw.handle_command("wrapped", base_state)
+        with patch.object(timeutil, "now", return_value=1000.0):
+            result = commands.handle_command("wrapped", base_state)
         assert base_state.pause_until is None
         assert base_state.wrap_alerted is True
         assert base_state.wrapped_at == 1000.0
         assert result is not None and "Pause" not in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_wrapped_at_backdates_without_pause(self, _save: MagicMock, base_state: WatcherState) -> None:
         now = datetime(2026, 10, 11, 12, 21).timestamp()
         base_state.alert_calls_sent = ["wrap"]
-        with patch.object(mw, "_now", return_value=now):
-            result = mw.handle_command("wrapped at 11:05", base_state)
+        with patch.object(timeutil, "now", return_value=now):
+            result = commands.handle_command("wrapped at 11:05", base_state)
         assert base_state.wrapped_at == datetime(2026, 10, 11, 11, 5).timestamp()
         assert base_state.wrap_alerted is True
         assert base_state.alert_calls_sent == []
         assert base_state.pause_until is None
         assert result is not None and "(11:05)" in result and "ab 12:05" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_wrapped_at_future_clock_means_yesterday(self, _save: MagicMock, base_state: WatcherState) -> None:
         now = datetime(2026, 10, 11, 0, 30).timestamp()
-        with patch.object(mw, "_now", return_value=now):
-            mw.handle_command("gewrappt um 23:40", base_state)
+        with patch.object(timeutil, "now", return_value=now):
+            commands.handle_command("gewrappt um 23:40", base_state)
         assert base_state.wrapped_at == datetime(2026, 10, 10, 23, 40).timestamp()
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_wrapped_at_endphase_ignores_later_disturbance(self, _save: MagicMock, base_state: WatcherState) -> None:
         now = datetime(2026, 10, 11, 12, 50).timestamp()
         base_state.trend_ignore_before = datetime(2026, 10, 11, 12, 41).timestamp()
-        with patch.object(mw, "_now", return_value=now):
-            result = mw.handle_command("wrapped at 11:05", base_state)
+        with patch.object(timeutil, "now", return_value=now):
+            result = commands.handle_command("wrapped at 11:05", base_state)
         assert result is not None and "ab 12:05" in result
         assert base_state.trend_ignore_before == datetime(2026, 10, 11, 12, 41).timestamp()
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_wrapped_at_replaces_previous_wrap_guard(self, _save: MagicMock, base_state: WatcherState) -> None:
         now = datetime(2026, 10, 11, 12, 44).timestamp()
         base_state.wrapped_at = datetime(2026, 10, 11, 12, 21).timestamp()
         base_state.trend_ignore_before = datetime(2026, 10, 11, 12, 22).timestamp()
-        with patch.object(mw, "_now", return_value=now):
-            result = mw.handle_command("wrapped at 05:30", base_state)
+        with patch.object(timeutil, "now", return_value=now):
+            result = commands.handle_command("wrapped at 05:30", base_state)
         state = base_state.to_dict()  # fresh read; mypy keeps the narrowed attribute
         assert state["trend_ignore_before"] is None
         assert state["wrapped_at"] == datetime(2026, 10, 11, 5, 30).timestamp()
         assert result is not None and "ab 06:30" in result and "von 12:22 verworfen" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_wrapped_at_keeps_guard_before_previous_wrap(self, _save: MagicMock, base_state: WatcherState) -> None:
         now = datetime(2026, 10, 11, 12, 44).timestamp()
         guard = datetime(2026, 10, 11, 10, 0).timestamp()
         base_state.wrapped_at = datetime(2026, 10, 11, 12, 21).timestamp()
         base_state.trend_ignore_before = guard
-        with patch.object(mw, "_now", return_value=now):
-            result = mw.handle_command("wrapped at 05:30", base_state)
+        with patch.object(timeutil, "now", return_value=now):
+            result = commands.handle_command("wrapped at 05:30", base_state)
         assert base_state.trend_ignore_before == guard
         assert result is not None and "ab 06:30" in result and "verworfen" not in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_wrapped_at_invalid_clock_rejected(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("wrapped at 25:00", base_state)
+        result = commands.handle_command("wrapped at 25:00", base_state)
         assert result is not None and result.startswith("Fehler")
         assert base_state.wrapped_at is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_resume_without_pause(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("resume", base_state) == "Keine Pause aktiv."
+        assert commands.handle_command("resume", base_state) == "Keine Pause aktiv."
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_resume_resets_max_ambient(self, _save: MagicMock, cooking_state: WatcherState) -> None:
         cooking_state.pause_until = 5000.0
-        with patch.object(mw, "_now", return_value=1000.0):
-            result = mw.handle_command("resume", cooking_state)
+        with patch.object(timeutil, "now", return_value=1000.0):
+            result = commands.handle_command("resume", cooking_state)
         assert _field(cooking_state, "pause_until") is None
         assert cooking_state.max_ambient_temp is None
         assert cooking_state.trend_ignore_before == 1000.0
         assert result is not None and "Pause beendet" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_pause_shown_in_summary(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.pause_until = 1000.0 + 12 * 60
-        with patch.object(mw, "_now", return_value=1000.0):
-            lines = mw._alert_summary(base_state)
+        with patch.object(timeutil, "now", return_value=1000.0):
+            lines = status_text.alert_summary(base_state)
         assert any(l.startswith("Pause: AKTIV (noch 12 Min.") for l in lines)
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_set_pit(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("set pit 125", base_state)
+        result = commands.handle_command("set pit 125", base_state)
         assert base_state.pit_temp == 125.0
-        assert mw.effective_pit_temp(base_state) == 125.0
+        assert watcher_state.effective_pit_temp(base_state) == 125.0
         assert result is not None and "125" in result
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_pit_out_of_range_rejected(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("pit 20", base_state)
+        result = commands.handle_command("pit 20", base_state)
         assert result is not None and result.startswith("Fehler")
         assert base_state.pit_temp is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_reset_pit_uses_config_default(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.pit_temp = 125.0
-        mw.handle_command("reset pit", base_state)
+        commands.handle_command("reset pit", base_state)
         assert _field(base_state, "pit_temp") is None
-        assert mw.effective_pit_temp(base_state) == mw.PIT_TEMP_DEFAULT == 110.0
+        assert watcher_state.effective_pit_temp(base_state) == watcher_settings.PIT_TEMP_DEFAULT == 110.0
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_pit_in_summary(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert "Smoker-Temp (Pit): 110 C (Standard)" in mw._alert_summary(base_state)
+        assert "Smoker-Temp (Pit): 110 C (Standard)" in status_text.alert_summary(base_state)
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_wrapped_anchors_endphase_and_reset_wrap_clears(self, _save: MagicMock, base_state: WatcherState) -> None:
-        with patch.object(mw, "_now", return_value=1000.0):
-            result = mw.handle_command("wrapped", base_state)
+        with patch.object(timeutil, "now", return_value=1000.0):
+            result = commands.handle_command("wrapped", base_state)
         assert base_state.wrapped_at == 1000.0
         assert result is not None and "Endphasen-Prognose" in result
-        mw.handle_command("reset wrap", base_state)
+        commands.handle_command("reset wrap", base_state)
         assert _field(base_state, "wrapped_at") is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_pause_does_not_anchor_endphase(self, _save: MagicMock, base_state: WatcherState) -> None:
-        mw.handle_command("pause", base_state)
+        commands.handle_command("pause", base_state)
         assert base_state.wrapped_at is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_unknown_command(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("xyzzy", base_state) is None
+        assert commands.handle_command("xyzzy", base_state) is None
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_case_insensitivity(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert mw.handle_command("STATUS", base_state) == "__status__"
-        assert mw.handle_command("Help", base_state) == mw.HELP_TEXT
+        assert commands.handle_command("STATUS", base_state) == "__status__"
+        assert commands.handle_command("Help", base_state) == commands.HELP_TEXT
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_tempdown_alias(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("tempdown an", base_state)
+        result = commands.handle_command("tempdown an", base_state)
         assert base_state.tempalert_tempdown_enabled is True
         assert result is not None
 
@@ -627,16 +630,16 @@ class TestStateIO:
 
     def test_load_state_no_file(self, tmp_path: Path) -> None:
         fake_file = tmp_path / "nonexistent.json"
-        with patch.object(mw, "STATE_FILE", fake_file):
-            state = mw.load_state()
+        with patch.object(watcher_state, "STATE_FILE", fake_file):
+            state = watcher_state.load_state()
         assert state.tempalert_tempdown_enabled is True
         assert state.consecutive_errors == 0
 
     def test_load_state_existing_file(self, tmp_path: Path) -> None:
         state_file = tmp_path / "state.json"
         state_file.write_text(json.dumps({"max_ambient_temp": 140.0}))
-        with patch.object(mw, "STATE_FILE", state_file):
-            state = mw.load_state()
+        with patch.object(watcher_state, "STATE_FILE", state_file):
+            state = watcher_state.load_state()
         assert state.max_ambient_temp == 140.0
         # defaults applied for missing keys
         assert state.tempalert_tempdown_enabled is True
@@ -644,8 +647,8 @@ class TestStateIO:
     def test_save_state_writes_json(self, tmp_path: Path) -> None:
         state_file = tmp_path / "state.json"
         state = WatcherState()
-        with patch.object(mw, "STATE_FILE", state_file):
-            mw.save_state(state)
+        with patch.object(watcher_state, "STATE_FILE", state_file):
+            watcher_state.save_state(state)
         data = json.loads(state_file.read_text())
         assert "last_check" in data
         assert data["last_check"] is not None
@@ -653,17 +656,17 @@ class TestStateIO:
     def test_save_state_creates_parent_dirs(self, tmp_path: Path) -> None:
         state_file = tmp_path / "sub" / "dir" / "state.json"
         state = WatcherState()
-        with patch.object(mw, "STATE_FILE", state_file):
-            mw.save_state(state)
+        with patch.object(watcher_state, "STATE_FILE", state_file):
+            watcher_state.save_state(state)
         assert state_file.exists()
 
     def test_save_state_roundtrip(self, tmp_path: Path) -> None:
         state_file = tmp_path / "state.json"
         state = WatcherState()
         state.max_internal_temp = 85.0
-        with patch.object(mw, "STATE_FILE", state_file):
-            mw.save_state(state)
-            loaded = mw.load_state()
+        with patch.object(watcher_state, "STATE_FILE", state_file):
+            watcher_state.save_state(state)
+            loaded = watcher_state.load_state()
         assert loaded.max_internal_temp == 85.0
 
     def test_load_no_file_uses_config_defaults(self, tmp_path: Path) -> None:
@@ -680,8 +683,8 @@ class TestStateIO:
         )
         mock_cfg = MagicMock()
         mock_cfg.alerts = custom_alerts
-        with patch.object(mw, "STATE_FILE", fake_file), patch.object(mw, "cfg", mock_cfg):
-            state = mw.load_state()
+        with patch.object(watcher_state, "STATE_FILE", fake_file), patch.object(watcher_state, "cfg", mock_cfg):
+            state = watcher_state.load_state()
         assert state.tempalert_tempdown_enabled is False
         assert state.tempalert_stall_enabled is True
         assert state.stall_max_rate == 2.5
@@ -697,8 +700,8 @@ class TestStateIO:
         custom_alerts = AlertDefaultsConfig(tempalert_stall_enabled=True)
         mock_cfg = MagicMock()
         mock_cfg.alerts = custom_alerts
-        with patch.object(mw, "STATE_FILE", state_file), patch.object(mw, "cfg", mock_cfg):
-            state = mw.load_state()
+        with patch.object(watcher_state, "STATE_FILE", state_file), patch.object(watcher_state, "cfg", mock_cfg):
+            state = watcher_state.load_state()
         # State file value wins over config
         assert state.tempalert_stall_enabled is False
 
@@ -713,8 +716,8 @@ class TestStateIO:
         )
         mock_cfg = MagicMock()
         mock_cfg.alerts = custom_alerts
-        with patch.object(mw, "STATE_FILE", fake_file), patch.object(mw, "cfg", mock_cfg):
-            state = mw.load_state()
+        with patch.object(watcher_state, "STATE_FILE", fake_file), patch.object(watcher_state, "cfg", mock_cfg):
+            state = watcher_state.load_state()
         assert state.ruhephase_target_temp is None
         assert state.wrap_target_temp is None
         assert state.ambient_range_min is None
@@ -737,7 +740,7 @@ class TestApplyAlertDefaults:
             ambient_range_max=130.0,
             tempalert_cookend_enabled=False,
         )
-        mw._apply_alert_defaults(state, alert_cfg)
+        watcher_state.apply_alert_defaults(state, alert_cfg)
         assert state.tempalert_tempdown_enabled is False
         assert state.tempalert_ruhephase_enabled is True
         assert state.ruhephase_target_temp == 55.0
@@ -813,8 +816,8 @@ class TestRunMeaterCheck:
         """Return a dict of patch targets and their mock objects."""
         return {
             "get_meater_data": patch.object(mw, "get_meater_data"),
-            "call_pitmaster": patch.object(mw, "call_pitmaster"),
-            "save_state": patch.object(mw, "save_state"),
+            "call_pitmaster": patch.object(alerting, "call_pitmaster"),
+            "save_state": patch.object(watcher_state, "save_state"),
         }
 
     def _make_data(self, **overrides: Any) -> dict[str, Any]:
@@ -842,8 +845,8 @@ class TestRunMeaterCheck:
                 "get_meater_data",
                 return_value={"error": "HTTP 404", "error_kind": "cook_gone"},
             ),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             result = mw.run_meater_check(base_state, send=mock_send)
         assert result == "__cook_ended__"
@@ -855,8 +858,8 @@ class TestRunMeaterCheck:
         mock_send = MagicMock()
         with (
             patch.object(mw, "get_meater_data", return_value=self._make_data()),
-            patch.object(mw, "call_pitmaster"),
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state, send=mock_send, eta_only=True)
         mock_send.assert_called_once()
@@ -873,8 +876,8 @@ class TestRunMeaterCheck:
         mock_send = MagicMock()
         with (
             patch.object(mw, "get_meater_data", return_value=self._make_data()),
-            patch.object(mw, "call_pitmaster"),
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state, send=mock_send)
         text, image = mock_send.call_args.args
@@ -894,8 +897,8 @@ class TestRunMeaterCheck:
                 "get_meater_data",
                 return_value={"error": "CDP connect failed", "error_kind": "transient"},
             ),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             result = mw.run_meater_check(base_state, send=mock_send)
         assert result != "__cook_ended__"
@@ -911,8 +914,8 @@ class TestRunMeaterCheck:
         base_state.consecutive_errors = 2
         with (
             patch.object(mw, "get_meater_data", return_value={"error": "boom"}),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             result = mw.run_meater_check(base_state)
         assert result != "__cook_ended__"
@@ -923,8 +926,8 @@ class TestRunMeaterCheck:
         data = self._make_data()
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster"),
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
+            patch.object(watcher_state, "save_state"),
         ):
             result = mw.run_meater_check(base_state)
         assert result != "__cook_ended__"
@@ -942,8 +945,8 @@ class TestRunMeaterCheck:
 
         with (
             patch.object(mw, "get_meater_data", side_effect=_fetch),
-            patch.object(mw, "call_pitmaster"),
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(cooking_state)
         # Re-seeded from the current reading, not restored to the stale 120.0.
@@ -956,8 +959,8 @@ class TestRunMeaterCheck:
         data = self._make_data(ambient_temp_c=110)
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(cooking_state)
         mock_call.assert_called()
@@ -971,8 +974,8 @@ class TestRunMeaterCheck:
         data = self._make_data(internal_temp_c=74)  # below target
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(cooking_state)
         mock_call.assert_called()
@@ -988,10 +991,10 @@ class TestRunMeaterCheck:
     def _run_stall(self, state: WatcherState, internal: float, send: MagicMock | None = None) -> MagicMock:
         data = self._make_data(internal_temp_c=internal)
         with (
-            patch.object(mw, "_now", return_value=self.NOW),
+            patch.object(timeutil, "now", return_value=self.NOW),
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(state, send=send)
         return mock_call
@@ -1090,8 +1093,8 @@ class TestRunMeaterCheck:
         data = self._make_data(internal_temp_c=76)
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state)
         mock_call.assert_called()
@@ -1105,8 +1108,8 @@ class TestRunMeaterCheck:
         mock_send = MagicMock()
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state, send=mock_send)
         call_msg = mock_call.call_args[0][0]
@@ -1121,8 +1124,8 @@ class TestRunMeaterCheck:
         data = self._make_data(internal_temp_c=97, target_temp_c=96)
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state, send=MagicMock())
         msgs = [c.args[0] for c in mock_call.call_args_list]
@@ -1135,8 +1138,8 @@ class TestRunMeaterCheck:
         data = self._make_data(internal_temp_c=89, target_temp_c=96)
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state, send=MagicMock())
         msgs = [c.args[0] for c in mock_call.call_args_list]
@@ -1149,8 +1152,8 @@ class TestRunMeaterCheck:
         data = self._make_data(ambient_temp_c=90)
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state)
         mock_call.assert_called()
@@ -1163,8 +1166,8 @@ class TestRunMeaterCheck:
         data = self._make_data(ambient_temp_c=140)
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state)
         mock_call.assert_called()
@@ -1177,8 +1180,8 @@ class TestRunMeaterCheck:
         data = self._make_data(ambient_temp_c=115)
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state)
         # call_pitmaster should not be called for ambient alert
@@ -1189,8 +1192,8 @@ class TestRunMeaterCheck:
         data = self._make_data(internal_temp_c=96, target_temp_c=96)
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state)
         mock_call.assert_called()
@@ -1201,8 +1204,8 @@ class TestRunMeaterCheck:
         data = self._make_data(internal_temp_c=96, target_temp_c=96)
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state)
         # Should NOT call for target reached since we already hit 3
@@ -1215,8 +1218,8 @@ class TestRunMeaterCheck:
         data = self._make_data(internal_temp_c=30)  # below COOKEND_PROBE_REMOVED_TEMP
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             result = mw.run_meater_check(base_state)
         assert result == "__cook_ended__"
@@ -1225,8 +1228,8 @@ class TestRunMeaterCheck:
     def _run_with_send(self, state: WatcherState, send: MagicMock, **data: Any) -> tuple[str, MagicMock]:
         with (
             patch.object(mw, "get_meater_data", return_value=self._make_data(**data)),
-            patch.object(mw, "call_pitmaster") as mock_call,
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster") as mock_call,
+            patch.object(watcher_state, "save_state"),
         ):
             result = mw.run_meater_check(state, send=send)
         return result, mock_call
@@ -1253,7 +1256,7 @@ class TestRunMeaterCheck:
         cooking_state.max_ambient_temp = 130.0
         cooking_state.pause_until = 2_000_000_000.0
         send = MagicMock()
-        with patch.object(mw, "_now", return_value=1_900_000_000.0):
+        with patch.object(timeutil, "now", return_value=1_900_000_000.0):
             _, mock_call = self._run_with_send(cooking_state, send, ambient_temp_c=80)
         assert not any("ACHTUNG" in t for t in self._texts(send))
         mock_call.assert_not_called()
@@ -1265,7 +1268,7 @@ class TestRunMeaterCheck:
         base_state.target_override = 90.0
         base_state.pause_until = 2_000_000_000.0
         send = MagicMock()
-        with patch.object(mw, "_now", return_value=1_900_000_000.0):
+        with patch.object(timeutil, "now", return_value=1_900_000_000.0):
             _, mock_call = self._run_with_send(base_state, send, ambient_temp_c=80, internal_temp_c=91)
         texts = self._texts(send)
         assert not any("Ambient zu niedrig" in t for t in texts)
@@ -1276,7 +1279,7 @@ class TestRunMeaterCheck:
         cooking_state.max_ambient_temp = 130.0
         cooking_state.pause_until = 1_000.0
         send = MagicMock()
-        with patch.object(mw, "_now", return_value=2_000.0):
+        with patch.object(timeutil, "now", return_value=2_000.0):
             result, mock_call = self._run_with_send(cooking_state, send, ambient_temp_c=100)
         assert _field(cooking_state, "pause_until") is None
         assert cooking_state.max_ambient_temp == 100
@@ -1336,8 +1339,8 @@ class TestRunMeaterCheck:
         failing = MagicMock(side_effect=RuntimeError("down"))
         with (
             patch.object(mw, "get_meater_data", return_value=offline),
-            patch.object(mw, "call_pitmaster"),
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state, send=failing)
             assert base_state.offline_notified is False
@@ -1385,7 +1388,7 @@ class TestRunMeaterCheck:
     def test_linear_forecast_capped(self, base_state: WatcherState) -> None:
         # 0.12 C/h over the last hour, 6 C to go -> 50 h -> "nicht absehbar"
         base_state.internal_samples = [[1_000_000.0 + i * 600, 90.0 + 0.02 * i] for i in range(7)]
-        line = mw._forecast_line(base_state, 1_000_000.0 + 3600, 90.12, 96.0)
+        line = status_text.forecast_line(base_state, 1_000_000.0 + 3600, 90.12, 96.0)
         assert line is not None and "nicht absehbar" in line
 
     def test_endphase_flat_window_capped(self, base_state: WatcherState) -> None:
@@ -1393,7 +1396,7 @@ class TestRunMeaterCheck:
         t0 = 1_000_000.0
         base_state.wrapped_at = t0 - 3 * 3600
         base_state.internal_samples = [[t0 - 2 * 3600 + i * 600, 93.0] for i in range(13)]
-        lines = mw._endphase_lines(base_state, t0, 93.0, 94.0)
+        lines = status_text.endphase_lines(base_state, t0, 93.0, 94.0)
         assert len(lines) == 1 and lines[0].endswith("nicht absehbar (Kern steigt kaum)")
 
     def test_endphase_uses_pit_and_fixed_start(self, base_state: WatcherState) -> None:
@@ -1408,20 +1411,42 @@ class TestRunMeaterCheck:
         ]
         now = start + 18 * 600
         core = base_state.internal_samples[-1][1]
-        lines = mw._endphase_lines(base_state, now, core, 96.0)
+        lines = status_text.endphase_lines(base_state, now, core, 96.0)
         expected = now + math.log((105.0 - core) / (105.0 - 96.0)) / 0.1 * 3600
         assert len(lines) == 1
-        assert f"A=Pit 105 C, Fit {mw._clock(start, now)}-" in lines[0]
+        assert f"A=Pit 105 C, Fit {timeutil.clock(start, now)}-" in lines[0]
         assert "RMS 0.00 C" in lines[0]
-        assert lines[0].endswith(f"~{mw._clock(expected, now)}")
+        assert lines[0].endswith(f"~{timeutil.clock(expected, now)}")
+
+    def test_endphase_outlier_in_last_reading(self, base_state: WatcherState) -> None:
+        # Same curve with a little noise, last reading 1 C too low (glitch):
+        # main ETA from the curve value, measured-value ETA as a hint line.
+        t0 = 1_000_000.0
+        base_state.wrapped_at = t0 - 4 * 3600
+        base_state.pit_temp = 105.0
+        start = base_state.wrapped_at + 3600
+        noise = [0.05, -0.04, 0.03, -0.05, 0.04, -0.03, 0.05, -0.04, 0.02, -0.05]
+        curve = [105.0 - 25.0 * math.exp(-0.1 * i / 6) + noise[i % 10] for i in range(19)]
+        curve[-1] -= 1.0
+        base_state.internal_samples = [[start + i * 600, k] for i, k in enumerate(curve)]
+        now = start + 18 * 600
+        lines = status_text.endphase_lines(base_state, now, curve[-1], 96.0)
+        clean = 105.0 - 25.0 * math.exp(-0.3)
+        expected = now + math.log((105.0 - clean) / (105.0 - 96.0)) / 0.1 * 3600
+        assert len(lines) == 2
+        eta = datetime.strptime(lines[0].rsplit("~", 1)[1], "%H:%M")
+        ref = datetime.strptime(timeutil.clock(expected, now), "%H:%M")
+        assert abs((eta - ref).total_seconds()) <= 5 * 60
+        assert lines[1].startswith(f"  Letzter Messwert {curve[-1]:.1f} C weicht von der Kurve")
+        assert "ab Messwert: ~" in lines[1]
 
     def test_resets_consecutive_errors_on_success(self, base_state: WatcherState) -> None:
         base_state.consecutive_errors = 2
         data = self._make_data()
         with (
             patch.object(mw, "get_meater_data", return_value=data),
-            patch.object(mw, "call_pitmaster"),
-            patch.object(mw, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
+            patch.object(watcher_state, "save_state"),
         ):
             mw.run_meater_check(base_state)
         assert base_state.consecutive_errors == 0
@@ -1483,9 +1508,9 @@ class TestEventLoopErrorTracking:
 
         with (
             patch.object(mw, "MEATER_URL", "https://meater.io/test-uuid"),
-            patch.object(mw, "load_state", return_value=WatcherState()),
-            patch.object(mw, "save_state"),
-            patch.object(mw, "call_pitmaster"),
+            patch.object(watcher_state, "load_state", return_value=WatcherState()),
+            patch.object(watcher_state, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
             patch.object(mw, "run_meater_check", return_value="ok"),
             patch.object(mw, "cfg") as mock_cfg,
         ):
@@ -1510,9 +1535,9 @@ class TestStartupGreeting:
 
         with (
             patch.object(mw, "MEATER_URL", "https://meater.io/test-uuid"),
-            patch.object(mw, "load_state", return_value=WatcherState()),
-            patch.object(mw, "save_state"),
-            patch.object(mw, "call_pitmaster"),
+            patch.object(watcher_state, "load_state", return_value=WatcherState()),
+            patch.object(watcher_state, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
             patch.object(mw, "run_meater_check", return_value="ok"),
             patch.object(mw, "cfg") as mock_cfg,
         ):
@@ -1528,7 +1553,7 @@ class TestStartupGreeting:
         greeting_call = calls[0]
         assert greeting_call[0][0] == "!room:test"
         assert "MEATER Watcher ist gestartet" in greeting_call[0][1]
-        assert mw.HELP_TEXT in greeting_call[0][1]
+        assert commands.HELP_TEXT in greeting_call[0][1]
 
     def test_initial_check_runs_with_sender_after_connect(self) -> None:
         """The initial check runs with the messaging sender so it posts status + screenshot."""
@@ -1540,9 +1565,9 @@ class TestStartupGreeting:
 
         with (
             patch.object(mw, "MEATER_URL", "https://meater.io/test-uuid"),
-            patch.object(mw, "load_state", return_value=WatcherState()),
-            patch.object(mw, "save_state"),
-            patch.object(mw, "call_pitmaster"),
+            patch.object(watcher_state, "load_state", return_value=WatcherState()),
+            patch.object(watcher_state, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
             patch.object(mw, "run_meater_check", return_value="ok") as mock_check,
             patch.object(mw, "cfg") as mock_cfg,
         ):
@@ -1591,9 +1616,9 @@ class TestUpdateRoomRouting:
 
         with (
             patch.object(mw, "MEATER_URL", "https://meater.io/test-uuid"),
-            patch.object(mw, "load_state", return_value=WatcherState()),
-            patch.object(mw, "save_state"),
-            patch.object(mw, "call_pitmaster"),
+            patch.object(watcher_state, "load_state", return_value=WatcherState()),
+            patch.object(watcher_state, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
             patch.object(mw, "run_meater_check", side_effect=_check),
             patch.object(mw, "cfg") as mock_cfg,
         ):
@@ -1651,9 +1676,9 @@ class TestPeriodicSchedule:
         mock_messaging = _make_mock_messaging(sync_side_effect=_sync)
         with (
             patch.object(mw, "MEATER_URL", "https://meater.io/test-uuid"),
-            patch.object(mw, "load_state", return_value=WatcherState()),
-            patch.object(mw, "save_state"),
-            patch.object(mw, "call_pitmaster"),
+            patch.object(watcher_state, "load_state", return_value=WatcherState()),
+            patch.object(watcher_state, "save_state"),
+            patch.object(alerting, "call_pitmaster"),
             patch.object(mw, "run_meater_check", side_effect=_slow_check),
             patch.object(mw, "effective_check_interval", return_value=interval),
             patch.object(mw, "cfg") as mock_cfg,
@@ -1672,7 +1697,7 @@ class TestPeriodicSchedule:
 def test_append_sample_keeps_whole_cook() -> None:
     now = 200_000.0
     samples = [[now - 30 * 3600, 20.0], [now - 49 * 3600, 10.0]]
-    kept = mw._append_sample(samples, now, 90.0)
+    kept = signal_stats.append_sample(samples, now, 90.0)
     assert kept == [[now - 30 * 3600, 20.0], [now, 90.0]]
 
 
@@ -1687,16 +1712,16 @@ class TestAmbientRiseDisturbance:
 
     def test_spike_above_window_max(self) -> None:
         st = self._state([(0.0, 104.0), (600.0, 106.6), (1200.0, 108.2)])
-        reason = mw._detect_disturbance(st, 1800.0, 92.9, 113.9)
+        reason = signal_stats.detect_disturbance(st, 1800.0, 92.9, 113.9)
         assert reason is not None and "Ambient-Spitze" in reason
 
     def test_recovery_after_dip_is_no_spike(self) -> None:
         st = self._state([(0.0, 105.0), (600.0, 85.0), (1200.0, 95.0)], core=76.0)
-        assert mw._detect_disturbance(st, 1800.0, 76.0, 104.0) is None
+        assert signal_stats.detect_disturbance(st, 1800.0, 76.0, 104.0) is None
 
     def test_warmup_rise_is_ignored(self) -> None:
         st = self._state([(0.0, 40.0), (600.0, 60.0), (1200.0, 80.0)], core=20.0)
-        assert mw._detect_disturbance(st, 1800.0, 20.0, 110.0) is None
+        assert signal_stats.detect_disturbance(st, 1800.0, 20.0, 110.0) is None
 
     # Pit swinging ±4 C every reading (e.g. a pellet grill cycling)
     NOISY = [100.0, 106.0, 99.0, 105.0, 98.0, 107.0, 101.0]
@@ -1704,49 +1729,49 @@ class TestAmbientRiseDisturbance:
     def test_noisy_pit_swing_is_no_spike(self) -> None:
         # 5.5 C above the window max would trip the fixed 5 C threshold.
         st = self._state([(i * 600.0, a) for i, a in enumerate(self.NOISY)])
-        assert mw._detect_disturbance(st, 4200.0, 92.0, 112.5) is None
+        assert signal_stats.detect_disturbance(st, 4200.0, 92.0, 112.5) is None
 
     def test_noisy_pit_real_flare_up_still_detected(self) -> None:
         st = self._state([(i * 600.0, a) for i, a in enumerate(self.NOISY)])
-        reason = mw._detect_disturbance(st, 4200.0, 92.0, 135.0)
+        reason = signal_stats.detect_disturbance(st, 4200.0, 92.0, 135.0)
         assert reason is not None and "Ambient-Spitze" in reason
 
 
 class TestNoiseSigma:
     def test_steady_trend_is_no_noise(self) -> None:
         samples = [[i * 600.0, 70.0 + 0.4 * i] for i in range(5)]
-        assert mw._noise_sigma(samples) == pytest.approx(0.0, abs=1e-9)
+        assert signal_stats.noise_sigma(samples) == pytest.approx(0.0, abs=1e-9)
 
     def test_single_dip_barely_moves_estimate(self) -> None:
         calm = [[i * 600.0, a] for i, a in enumerate([102.0, 103.1, 101.8, 102.6, 102.2, 103.0, 101.9])]
         dipped = [*calm[:4], [2400.0, 78.0], *calm[5:]]
-        assert mw._noise_sigma(dipped) < 2 * mw._noise_sigma(calm) < 2.0
+        assert signal_stats.noise_sigma(dipped) < 2 * signal_stats.noise_sigma(calm) < 2.0
 
     def test_alternating_swings_count_as_noise(self) -> None:
         samples = [[i * 600.0, a] for i, a in enumerate(TestAmbientRiseDisturbance.NOISY)]
-        assert mw._noise_sigma(samples) > 3.0
+        assert signal_stats.noise_sigma(samples) > 3.0
 
     def test_too_few_readings(self) -> None:
-        assert mw._noise_sigma([[0.0, 100.0], [600.0, 120.0]]) == 0.0
+        assert signal_stats.noise_sigma([[0.0, 100.0], [600.0, 120.0]]) == 0.0
 
 
 class TestTrendAbCommand:
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_trend_ab_sets_trend_start(self, _save: MagicMock, base_state: WatcherState) -> None:
         now = datetime(2026, 10, 11, 13, 30).timestamp()
-        with patch.object(mw, "_now", return_value=now):
-            result = mw.handle_command("trend ab 12:20", base_state)
+        with patch.object(timeutil, "now", return_value=now):
+            result = commands.handle_command("trend ab 12:20", base_state)
         assert base_state.trend_ignore_before == datetime(2026, 10, 11, 12, 20).timestamp()
         assert result == "Trend und Stall-Rate werten ab 12:20 aus."
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_trend_reset_clears(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.trend_ignore_before = 1000.0
-        result = mw.handle_command("trend reset", base_state)
+        result = commands.handle_command("trend reset", base_state)
         assert base_state.to_dict()["trend_ignore_before"] is None  # fresh read; mypy keeps the narrowed attribute
         assert result == "Trend und Stall-Rate werten wieder alle Daten aus."
 
-    @patch.object(mw, "save_state")
+    @patch.object(watcher_state, "save_state")
     def test_trend_ab_invalid_clock(self, _save: MagicMock, base_state: WatcherState) -> None:
-        result = mw.handle_command("trend ab 24:00", base_state)
+        result = commands.handle_command("trend ab 24:00", base_state)
         assert result is not None and result.startswith("Fehler")

@@ -27,7 +27,7 @@ import re
 import socket
 from datetime import datetime
 from pathlib import Path
-from typing import NamedTuple, TypedDict
+from typing import Literal, NamedTuple, TypedDict
 from urllib.parse import urlparse
 
 import requests
@@ -58,6 +58,25 @@ class _RawCookData(TypedDict):
     summary_text: str | None
     summary_peak: int | None
     searching_for_cook: bool
+
+
+class MeaterData(TypedDict, total=False):
+    """Flat dictionary of MEATER cook values returned by the monitor."""
+
+    internal_temp_c: float | None
+    ambient_temp_c: float | None
+    target_temp_c: float | None
+    remaining_time: str | None
+    remaining_minutes: int | None
+    elapsed_time: str | None
+    status: str
+    cook_name: str | None
+    screenshot: str | None
+    started_at: str | None
+    peak_temp_c: float | None
+    source: str
+    error: str
+    error_kind: Literal["transient", "cook_gone"]
 
 
 class CookData(NamedTuple):
