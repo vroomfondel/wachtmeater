@@ -1,4 +1,4 @@
-.PHONY: tests help install venv lint isort tcheck build commit-checks prepare gitleaks pypibuild pypipush
+.PHONY: tests help install venv lint isort tcheck build commit-checks prepare gitleaks distcheck pypibuild pypipush
 SHELL := /usr/bin/bash
 .ONESHELL:
 
@@ -75,10 +75,18 @@ dist/wachtmeater-$(VERSION).tar.gz dist/wachtmeater-$(VERSION)-py3-none-any.whl 
 	@touch dist/.touchfile
 
 
-pypibuild: venv dist/wachtmeater-$(VERSION).tar.gz dist/wachtmeater-$(VERSION)-py3-none-any.whl
+# Refuses to let a build artifact leave the machine if it carries a git-crypt
+# protected path (those are PLAINTEXT in the working tree) or any file outside
+# the allowlist that pyproject.toml declares. Gates `pypibuild` and `pypipush`.
+distcheck: venv dist/wachtmeater-$(VERSION).tar.gz dist/wachtmeater-$(VERSION)-py3-none-any.whl
+	@$(venv_activated)
+	python repo_scripts/check_dist_secrets.py
+
+pypibuild: distcheck
 
 dist/.touchfile_push: dist/wachtmeater-$(VERSION).tar.gz dist/wachtmeater-$(VERSION)-py3-none-any.whl
 	@$(venv_activated)
+	$(MAKE) distcheck
 	hatch publish -r main
 	@touch dist/.touchfile_push
 

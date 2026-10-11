@@ -179,3 +179,53 @@ class TestGetOrCreateRoomPowerLevels:
         )
         assert selection.cook == "!existing:test"
         adapter._handler.client.room_create.assert_not_called()
+
+
+def _room_create_error(message: str) -> Any:
+    from nio import RoomCreateError
+
+    return RoomCreateError(message, status_code="400")
+
+
+class TestGetOrCreateRoomV12:
+    """Room v12+ homeservers reject the creator in ``power_levels.users``."""
+
+    V12_REJECTION = f"Creator user {BOT} must not appear in content.users"
+
+    def _run(self, adapter: Any) -> Any:
+        return asyncio.run(
+            adapter.get_or_create_room(
+                configured_room="",
+                auto_create=True,
+                meater_uuid="15f2e6f5-a628-458e-ad7d-7e884645223c",
+                pitmaster_mxid=PITMASTER,
+                persisted_room_id=None,
+                promote_pitmaster_to_admin=True,
+            )
+        )
+
+    def test_retries_without_bot_on_v12_rejection(self) -> None:
+        from nio import RoomCreateResponse
+
+        adapter = _make_room_adapter()
+        ok = MagicMock(spec=RoomCreateResponse)
+        ok.room_id = "!cook:test"
+        adapter._handler.client.room_create = AsyncMock(side_effect=[_room_create_error(self.V12_REJECTION), ok])
+
+        selection = self._run(adapter)
+
+        assert selection.cook == "!cook:test"
+        calls = adapter._handler.client.room_create.call_args_list
+        assert len(calls) == 2
+        assert calls[0].kwargs["power_level_override"] == {"users": {BOT: 100, PITMASTER: 100}}
+        assert calls[1].kwargs["power_level_override"] == {"users": {PITMASTER: 100}}
+        assert calls[1].kwargs["invite"] == [PITMASTER]
+
+    def test_other_error_is_not_retried(self) -> None:
+        adapter = _make_room_adapter()
+        adapter._handler.client.room_create = AsyncMock(return_value=_room_create_error("Rate limited"))
+
+        selection = self._run(adapter)
+
+        assert selection.cook is None
+        adapter._handler.client.room_create.assert_called_once()

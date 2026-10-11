@@ -115,7 +115,7 @@ class MatrixMessagingAdapter:
             (or ``None`` when the corresponding source did not yield a
             usable room).
         """
-        from nio import JoinResponse, RoomCreateResponse
+        from nio import JoinResponse, RoomCreateError, RoomCreateResponse
 
         broadcast_id: str | None = None
         if configured_room:
@@ -130,7 +130,7 @@ class MatrixMessagingAdapter:
 
             if cook_id is None:
                 short_uuid = meater_uuid.replace("-", "")[:8].lower()
-                resp = await self._handler.client.room_create(
+                create_kwargs = dict(
                     name=f"Wachtmeater: {short_uuid}",
                     topic=f"MEATER Cook {meater_uuid}",
                     invite=[pitmaster_mxid] if pitmaster_mxid else [],
@@ -141,8 +141,19 @@ class MatrixMessagingAdapter:
                             "content": {"algorithm": "m.megolm.v1.aes-sha2"},
                         }
                     ],
-                    power_level_override=self._cook_room_power_levels(pitmaster_mxid, promote_pitmaster_to_admin),
                 )
+                power_levels = self._cook_room_power_levels(pitmaster_mxid, promote_pitmaster_to_admin)
+                resp = await self._handler.client.room_create(**create_kwargs, power_level_override=power_levels)
+                if self._is_creator_in_users_rejection(resp) and power_levels is not None:
+                    # Room v12+ (MSC4289): creators hold implicit top power and must not be listed.
+                    users = {u: lvl for u, lvl in power_levels["users"].items() if u != self.get_bot_user_id()}
+                    resp = await self._handler.client.room_create(
+                        **create_kwargs, power_level_override={**power_levels, "users": users}
+                    )
+                if isinstance(resp, RoomCreateError):
+                    MatrixMessagingAdapter.logger.error(
+                        f"Cook-Room konnte nicht erstellt werden: {resp.status_code} {resp.message}"
+                    )
                 if isinstance(resp, RoomCreateResponse):
                     cook_id = resp.room_id
                     if promote_pitmaster_to_admin and pitmaster_mxid:
@@ -183,6 +194,20 @@ class MatrixMessagingAdapter:
         if not (promote_pitmaster_to_admin and pitmaster_mxid):
             return None
         return {"users": {self.get_bot_user_id(): 100, pitmaster_mxid: 100}}
+
+    @staticmethod
+    def _is_creator_in_users_rejection(resp: object) -> bool:
+        """Whether *resp* is the homeserver refusing the creator in ``power_levels.users``.
+
+        Args:
+            resp: Result of ``room_create``.
+
+        Returns:
+            ``True`` for the room-v12+ rejection, ``False`` otherwise.
+        """
+        from nio import RoomCreateError
+
+        return isinstance(resp, RoomCreateError) and "must not appear in content.users" in (resp.message or "")
 
     async def _resolve_configured_room(self, spec: str) -> str | None:
         """Resolve a configured room spec (ID or alias) to a room ID.
