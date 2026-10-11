@@ -124,6 +124,12 @@ def test_select_since_uses_day_of_last_reading() -> None:
     assert len(cf.select_since(READINGS, "07:00")) == len(READINGS)
 
 
+def test_select_until_cuts_after_minute() -> None:
+    kept = cf.select_until(READINGS, "09:03")
+    assert kept[-1][1] == 87.2  # 09:03:25 is still inside the minute
+    assert len(cf.select_until(READINGS, "11:00")) == 0  # 11:00 -> previous day
+
+
 def _write_export(tmp_path: Path) -> Path:
     messages = [
         {"origin_server_ts": 1791698000000, "content": {"body": "Hallo! MEATER Watcher ist gestartet."}},
@@ -211,7 +217,7 @@ def test_report_caps_far_etas() -> None:
 def test_cli_eta_parser() -> None:
     args = build_parser().parse_args(["eta", "x.zip", "--pit", "120", "--since", "08:00"])
     assert (args.command, args.export, args.pit, args.target, args.since) == ("eta", "x.zip", 120.0, 96.5, "08:00")
-    assert args.auto is False
+    assert args.auto is False and args.until is None
     assert build_parser().parse_args(["eta", "x.zip", "--auto"]).pit is None  # -> config pit_temp
 
 

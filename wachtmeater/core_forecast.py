@@ -622,13 +622,46 @@ def select_since(readings: Sequence[Reading], since: str) -> list[Reading]:
     Returns:
         The readings at or after that time.
     """
-    hh, mm = map(int, since.split(":"))
-    last = datetime.fromtimestamp(readings[-1][0])
-    start = last.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    if start > last:
-        start -= timedelta(days=1)
-    cutoff = start.timestamp()
+    cutoff = _clock_cutoff(readings, since)
     return [r for r in readings if r[0] >= cutoff]
+
+
+def select_until(readings: Sequence[Reading], until: str) -> list[Reading]:
+    """Keep readings up to wall-clock time ``HH:MM`` (inclusive minute).
+
+    For after-the-fact analysis: "what would the forecast have said at
+    07:52?" — and to cut off the rest phase after the pull, which must not be
+    fitted.  The day is resolved like in ``select_since``.
+
+    Args:
+        readings: Readings, oldest first.
+        until: End time as ``"HH:MM"``.
+
+    Returns:
+        The readings up to and including that minute.
+    """
+    cutoff = _clock_cutoff(readings, until) + 60
+    return [r for r in readings if r[0] < cutoff]
+
+
+def _clock_cutoff(readings: Sequence[Reading], hhmm: str) -> float:
+    """Resolve ``HH:MM`` to an epoch on the day of the last reading.
+
+    If that time lies after the last reading, the previous day is meant.
+
+    Args:
+        readings: Readings, oldest first (non-empty).
+        hhmm: Wall-clock time as ``"HH:MM"``.
+
+    Returns:
+        Epoch seconds of that minute.
+    """
+    hh, mm = map(int, hhmm.split(":"))
+    last = datetime.fromtimestamp(readings[-1][0])
+    at = last.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if at > last:
+        at -= timedelta(days=1)
+    return at.timestamp()
 
 
 def forecast(

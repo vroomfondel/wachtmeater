@@ -120,6 +120,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp_e.add_argument("--target", type=float, default=96.5, help="Target core temperature in C")
     sp_e.add_argument("--since", default=None, help="Fit only from HH:MM on (end phase, after the wrap)")
     sp_e.add_argument(
+        "--until",
+        default=None,
+        help="Use readings only up to HH:MM (forecast as of that time; cuts off the rest phase)",
+    )
+    sp_e.add_argument(
         "--auto",
         action="store_true",
         help="Search the steady end-phase start adaptively (from --since or the first reading on)",
@@ -222,10 +227,18 @@ def main() -> None:
 
     elif args.command == "eta":
         from wachtmeater import cfg
-        from wachtmeater.core_forecast import find_endphase_start, format_report, forecast, select_since
+        from wachtmeater.core_forecast import (
+            find_endphase_start,
+            format_report,
+            forecast,
+            select_since,
+            select_until,
+        )
         from wachtmeater.element_export import readings_from_element_export
 
         readings = readings_from_element_export(args.export)
+        if args.until:
+            readings = select_until(readings, args.until)
         if args.since:
             readings = select_since(readings, args.since)
         pit = args.pit if args.pit is not None else cfg.monitoring.pit_temp

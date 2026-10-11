@@ -1,8 +1,20 @@
 """Shared fixtures for the wachtmeater test suite."""
 
+import os
+import time
+
 import pytest
 
 from wachtmeater.config import WatcherState
+
+# The reference cooks (Element exports, replays) were recorded in Berlin, and
+# the expected wall-clock strings ("08:01", "~14:49") are Berlin local time.
+# Pin the zone for the whole run so results do not depend on the machine —
+# CI runners use UTC.  Set at import time, not in a fixture: test modules
+# compute timestamps from local datetimes at module level, before any
+# fixture runs.
+os.environ["TZ"] = "Europe/Berlin"
+time.tzset()
 
 
 @pytest.fixture()

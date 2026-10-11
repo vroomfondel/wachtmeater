@@ -676,9 +676,10 @@ def _endphase_lines(state: WatcherState, now: float, current_internal: float | N
             f"(Anstieg noch nicht gleichmaessig)"
         ]
         # Preliminary over the latest data: A=pit as lower bound, A=100 C as
-        # likely value — across five cooks the free fit put A at 96.5-98.5 C
-        # (foil caps the surface near boiling), and in the backtest A=100 C
-        # was the best estimate available before the fit turns stable.
+        # likely value — in both cooks with decimals the free fit put A at
+        # 97.4-98.5 C (foil caps the surface near boiling), and in the
+        # backtest A=100 C was the best estimate available before the fit
+        # turns stable (docs/kerntemperatur-prognose.md, section 7).
         recent = thin([r for r in readings if r[0] >= readings[-1][0] - min_span], ENDPHASE_MAX_POINTS)
         prelim = core_forecast(recent, target=target, pit=pit, fixed_ambients=(ENDPHASE_FOIL_CAP,))
         for f in prelim.fixed:
