@@ -93,7 +93,7 @@ According to the original note, **only the end phase** may be fitted, i.e. after
 3. The search runs **anew on every check**. With more data an earlier start can become acceptable: on the export it moved from 08:12 to 08:01. At most 36 candidates are tried per search.
 4. A **disturbance or pause** (lid open, probe re-seated, `pause`) moves the earliest start later. So the dip is never fitted.
 
-As long as no stable window has been found, the watcher shows two **preliminary estimates** over the last 60 minutes, clearly marked: A = pit as the earliest exponential arrival, and A = 100 °C as the likely value in foil. Across all analysed cooks the freely fitted A came out at 96.5–98.5 °C, i.e. close to the boiling cap. In the backtest A = 100 °C was the best estimate available before the fit turns stable (see section 7).
+As long as no stable window has been found, the watcher shows two **preliminary estimates** over the last 60 minutes, clearly marked: A = pit as the earliest exponential arrival, and A = 100 °C as the likely value in foil. In both cooks with decimals the freely fitted A came out at 97.4–98.5 °C, i.e. close to the boiling cap. In the backtest A = 100 °C was the best estimate available before the fit turns stable (see section 7).
 
 ETAs more than 24 hours ahead are shown as "nicht absehbar (Kern steigt kaum)" (not foreseeable, core barely rising). If the core stays at the same value for an hour, the fit would otherwise give an ETA years in the future.
 
@@ -162,6 +162,8 @@ The module itself only works on generic readings `(epoch, core, ambient)`. For a
 wachtmeater eta "Element - Wachtmeater 15f2e6f5 - Chat Export - ….zip" --pit 110 --target 96.5 --since 08:00
 # search the end-phase start adaptively (from --since or the first reading on)
 wachtmeater eta "….zip" --since 06:30 --auto
+# forecast as of an earlier time: only readings up to --until (also cuts off the rest phase)
+wachtmeater eta "Element - Wachtmeater e62a2cc9 - ….zip" --since 05:46 --until 07:52 --auto --target 97 --pit 120
 ```
 
 Output for the 11 Oct 2026 cook. It is identical to the scipy output in the original note:
@@ -176,12 +178,68 @@ A=100.0 °C : c=0.162/h rms=0.069 -> 17:01
 A frei (≤Pit): A=98.5±1.8 °C c=0.183/h -> 18:26
 ```
 
+**Reading the output** (it is in German):
+
+| Term                                    | Meaning                                                                                                                        |
+|-----------------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
+| `Fit 08:01–10:25 (15 Punkte)`           | fit window and number of readings (*Punkte* = points)                                                                          |
+| `Kern 84.9→89.8 °C`                     | core temperature at the start and end of the window                                                                            |
+| `MEATER-Ambient Ø`                      | mean MEATER ambient — for information only, not a valid $A$                                                                    |
+| `Ziel`                                  | target core temperature                                                                                                        |
+| `linear … (früheste Ankunft)`           | linear trend, the earliest arrival                                                                                             |
+| `A=… : c=…/h rms=… -> 14:49`            | exponential fit with fixed $A$: rate constant $c$, RMS of the residuals in °C, ETA (wall-clock time of the last reading's day) |
+| `<- A = Pit (schnellste Exp.-Variante)` | marks the variant with $A$ = pit, the fastest exponential one                                                                  |
+| `A frei (≤Pit): A=98.5±1.8 °C`          | free fit, $A$ bounded by the pit temperature, with standard error                                                              |
+| `nie (A <= Ziel)`                       | never: $A$ does not exceed the target                                                                                          |
+| `nicht absehbar (…)`                    | not foreseeable: ETA more than 24 h ahead (core barely rising)                                                                 |
+
+**Options and edge cases:**
+
+- `--auto` from 06:30 finds the start 08:01 by itself and prints exactly the output above.
+- If `--auto` finds no stable window, the command logs an error and exits with code 1. This always happens with whole-degree exports (see section 7).
+- `--until HH:MM` uses only readings up to that minute. On a finished export this shows what the forecast would have said at an earlier time. It also cuts off the rest phase after the pull, which would otherwise be fitted too. As with `--since`, the day of the last reading applies; if the time lies after it, the previous day is meant.
+- Without `--pit` the config value `pit_temp` applies (default 110 °C). `--target` defaults to 96.5 °C.
+- The export must contain the watcher's status messages (`Internal (Fleisch): … Ambient (Rauch): …`). Other messages are ignored.
+
+**Caveat:** This export ends at 10:25 with the core at 89.8 °C. When this cook actually reached the target is not recorded in it. The table therefore proves that the calculation matches scipy, not that the forecast is right. For the accuracy of the forecast, see the backtest in section 7.
+
+**Example with a known arrival:** cook of 26/27 Sep, wrap at 04:46, target 97 °C actually reached at **09:25**. The smoker temperature is unknown; the MEATER ambient read 113–126 °C after the wrap, hence `--pit 120`. As of 07:52:
+
+```
+Fit 06:30–07:52 (9 Punkte): Kern 86.1→94.7 °C, MEATER-Ambient Ø 116.3 °C, Pit 120 °C, Ziel 97.0 °C
+linear      : 6.16 °C/h  -> 08:08  (früheste Ankunft)
+A=120.0 °C : c=0.236/h rms=0.493 -> 08:17  <- A = Pit (schnellste Exp.-Variante)
+A=104.0 °C : c=0.516/h rms=0.288 -> 08:25
+A=102.0 °C : c=0.606/h rms=0.226 -> 08:30
+A=100.0 °C : c=0.734/h rms=0.142 -> 08:39
+A frei (≤Pit): A=98.1±0.3 °C c=0.923/h -> 09:06
+```
+
+The free fit is 19 minutes early, the fixed variants 45–77 minutes. With `--until 08:23` the free fit predicts 09:40 (15 minutes late).
+
 ## 7. Validation
 
 - `tests/test_core_forecast.py` checks $c$, RMS, ETA and the free fit (A, standard error) against this table, using the 15 exact readings from the export.
 - `tests/test_cook_replay.py` replays the whole cook through the watcher in 10-minute steps: `wrapped` at 05:24, the forecast phases, the adaptive start at ~08:00, and the effect of `set pit`.
 
-**Backtest on earlier cooks** (Element exports from 2 May, 23 Jun, 25 Jul and 26/27 Sep 2026). For every end-phase check, the predictions of each method were recomputed and compared with the actual arrival at the target. Error in minutes, median, negative = too early.
+### Analysed cooks
+
+Besides the cook of 10/11 Oct, five more Element exports were analysed:
+
+| Export | Date | Resolution | Course | Target reached | Use |
+|---|---|---|---|---|---|
+| `15f2e6f5` | 10/11 Oct | 0.1 °C | wrap ~05:30; export ends 10:25 at 89.8 °C | unknown | derivation, tests; free A = 98.5 ± 1.8 °C |
+| `e62a2cc9` | 26/27 Sep | 0.1 °C | stall 01:51–04:46, wrap 04:46 | 95 °C 08:03, 96 °C 08:44, 97 °C 09:25 | backtest; free A = 97.4–98.1 °C |
+| `8d401460` | 25 Jul | whole degrees | stall 03:22–07:00, wrap probably ~06:30 | 95 °C 13:08, 96 °C 14:10 | backtest |
+| `62bebe00` | 23 Jun | whole degrees | data gap 01:12–07:29 | 95 °C 13:06, 96 °C 13:27 | backtest |
+| `f35f7682` | 2 May | whole degrees | watcher started at 78 °C; core at 93 °C 15:45–16:57 | 93 °C 15:45, 94 °C 17:08 | backtest |
+| `758731c2` | 27 Sep | 0.1 °C | rest phase only (75.9 → 69 °C) | – | ignored |
+
+The whole-degree exports predate the WebSocket (DOM scraping). The smoker temperature of the older cooks is not known. The calculations used 110, 120 and 130 °C; this changes little, because the freely fitted A lies far below.
+
+### Backtest
+
+Based on the exports from 2 May, 23 Jun, 25 Jul and 26/27 Sep 2026. For every end-phase check, the predictions of each method were recomputed and compared with the actual arrival at the target. Error in minutes, median, negative = too early.
 
 Only the 26/27 Sep cook has decimals and a known arrival:
 
@@ -195,13 +253,38 @@ Only the 26/27 Sep cook has decimals and a known arrival:
 
 The other three cooks only have whole degrees, because they predate the WebSocket. Rounding alone produces an RMS of about 0.29 °C there. A stable fit is therefore never reached, not even with a relaxed threshold, and $A$ cannot be determined from such data. All methods, MEATER included, scatter by about ±1.5 hours more than 2 hours out.
 
+Errors for the three whole-degree cooks (median in minutes, pit 120 °C; A = pit and A = 100 °C over the last 60 minutes, like the preliminary display):
+
+| Method | < 1 h before | 1–2 h | 2–3 h | > 3 h |
+|---|---|---|---|---|
+| MEATER | +66 | +33 | −9 | −81 |
+| linear | +14 | −4 | −53 | −100 |
+| A = pit | +11 | +3 | −46 | −69 |
+| A = 100 °C | +20 | +30 | −7 | −2 |
+
+Some medians look good, but the spread is large: more than 3 hours out, single values are off by up to ±3 hours. Shortly before the target, MEATER is clearly too pessimistic on these cooks (up to +140 minutes).
+
+### Alerts on the earlier cooks
+
+All cooks were also replayed through the watcher's current alert logic, without the commands sent manually back then:
+
+| Cook | Stall alert | actual stall | TempDown without warm-up guard | with warm-up guard (from core 40 °C) |
+|---|---|---|---|---|
+| `15f2e6f5` | 03:24 | 02:30–05:30 | 2 (wrap 05:37/05:48) | 2 (wrap; 0 with `pause`) |
+| `e62a2cc9` | 02:42 | 01:51–04:46 | ~18 (ambient spike of 117 °C during warm-up, then ~105 °C) | 1 (wrap 04:46) |
+| `8d401460` | 03:53 | 03:22–07:00 | 4 (107 °C at start) | 0 |
+
+- Stall detection hits all three real stalls, also with whole degrees. The wrap does not cause a false stall alert.
+- For `62bebe00` and `f35f7682` it reports a "stall" at 79–80 °C after the wrap: the rise was slow there (2–3 °C/h), and whole degrees make the rate coarse. In that case the message says "Bereits gewrappt" (already wrapped) instead of "Jetzt wrappen?" (wrap now?).
+- Back then the false TempDown alerts during warm-up were worked around with `reset ambient`. The warm-up guard (`tempdown_warmup_core_temp`, default 40 °C) removes them. A wrap is covered by `pause` or `wrapped`.
+
 ## 8. Interpretation and limitations
 
 - **A range, not a point.** For the 11 Oct cook the result was: earliest ~14:50 (A = pit), likely around 16:00–16:30, with a risk of an outlier towards 18:00 if $A$ really is ~98 °C. MEATER estimated ~15:30 at 10:25.
 - **An $A$ close to the target reacts strongly to small changes.** ±1.8 °C in $A$ means several hours of difference in the ETA. The RMS differences between the variants (0.07 vs. 0.09 °C) are close to the sensor resolution. That is a hint, not proof.
-- **The stable fit comes late**, about two hours into the end phase. Only the curvature of the later curve separates the variants. Until then the preliminary A=pit line is the best statement, and it is a lower bound.
+- **The stable fit comes late**, about two hours into the end phase. Only the curvature of the later curve separates the variants. Until then the watcher shows A = pit (lower bound) and A = 100 °C as preliminary values. The latter was the best early estimate in the backtest.
 - **With whole degrees (browser fallback) the end-phase forecast does not work.** Only the preliminary estimates remain.
-- **The thresholds are based on a single cook** (RMS 0.1 °C, standard error 3 °C). They are configurable or documented in `core_forecast.py` and should be reviewed after more cooks.
+- **The thresholds are based on few cooks** (RMS 0.1 °C, standard error 3 °C), only one of them with decimals and a known arrival. They are configurable or documented in `core_forecast.py` and should be reviewed after more cooks.
 - **The target temperature is only a guide.** The brisket is done when the probe slides in like butter. Start checking at ~93 °C.
 - **In a hurry?** Set the smoker to 125–135 °C after the wrap; Pit Physics recommends 275 °F. In foil this only raises $A$ while the surface is not capped at ~100 °C. Butcher paper or a foil boat benefit more.
 
@@ -213,4 +296,5 @@ The other three cooks only have whole degrees, because they predate the WebSocke
 - [AmazingRibs – Texas Brisket (PDF)](https://amazingribs.com/books/Texas-Brisket.pdf): cooking time depends mainly on thickness and average smoker temperature
 - [BU Today – Everything You Know about Grilling Is Wrong](https://bu.edu/today/2016/everything-you-know-about-grilling-is-wrong): interview with Greg Blonder
 - Measured data: Wachtmeater chat export of cook `15f2e6f5` from 10/11 Oct 2026 (Element), smoker actually at a constant 110 °C
+- Backtest data: Wachtmeater chat exports `e62a2cc9` (26/27 Sep 2026), `8d401460` (25 Jul 2026), `62bebe00` (23 Jun 2026), `f35f7682` (2 May 2026); `758731c2` (27 Sep 2026, rest phase only) not used
 - Derivation: private Obsidian note "Kerntemperatur-Prognose (Endphase)", from which this note and `core_forecast.py` originate
