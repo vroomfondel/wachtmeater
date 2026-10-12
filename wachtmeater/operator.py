@@ -281,21 +281,10 @@ async def _trust_own_devices(handler: MatrixClientHandler, user_id: str) -> None
         handler: The minimatrix client handler of the operator.
         user_id: The bot's own MXID (shared with the watcher pods).
     """
-    nio_client = handler.client
-
-    def verified() -> set[str]:
-        # nio's DeviceStore has no __contains__ (iterating yields devices), so
-        # ``user_id in device_store`` is always False — ask for the devices directly.
-        devices = nio_client.device_store.active_user_devices(user_id)
-        return {device.id for device in devices if nio_client.is_device_verified(device)}
-
-    before = verified()
-    await handler.trust_devices_for_user(user_id)
-    after = verified()
-    known = len(list(nio_client.device_store.active_user_devices(user_id)))
-    new = sorted(after - before)
+    result = await handler.trust_devices_for_user(user_id)
+    new = sorted(result.newly_trusted)
     logger.info(
-        f"Operator: vertraut {len(after)} von {known} Device(s) von {user_id}"
+        f"Operator: vertraut {len(result.trusted)} von {len(result.known)} Device(s) von {user_id}"
         + (f", davon neu: {', '.join(new)}" if new else ", keine neuen")
     )
 
