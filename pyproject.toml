@@ -35,16 +35,16 @@ classifiers = [
 ]
 
 dependencies = [
-    'minimatrix>=0.0.1',
+    'minimatrix>=0.0.16',
     'loguru>=0.7.3',
     'PyYAML>=6.0',
     'requests>=2.34.2',
-    'playwright>=1.60.0',
+    'playwright>=1.63.0',
     'kubernetes>=37.0.1',
-    'matrix-nio[e2e]>=0.25.0',
-    'websockets',
-    'numpy>=2.3.2',
-    'scipy>=1.16.1'
+    'matrix-nio[e2e]>=0.26.0',
+    'websockets>=17.2',
+    'numpy>=2.5.4',
+    'scipy>=1.18.1'
 ]
 
 [project.urls]

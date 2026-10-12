@@ -11,7 +11,7 @@ import pytest
 
 from nio.exceptions import LocalProtocolError
 
-ma = pytest.importorskip("wachtmeater.matrix_adapter")
+from wachtmeater import matrix_adapter as ma
 
 
 def _make_adapter() -> Any:

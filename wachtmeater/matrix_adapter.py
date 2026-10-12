@@ -21,7 +21,6 @@ from typing import ClassVar
 from nio import RoomSendError, UploadResponse
 from nio.exceptions import LocalProtocolError
 
-from wachtmeater.cross_signing import ensure_device_cross_signed
 from wachtmeater.messaging import MessageCallback, MessageSendError, RoomSelection
 
 from wachtmeater import cfg, read_dot_env_to_environ
@@ -31,7 +30,11 @@ read_dot_env_to_environ()
 
 from loguru import logger
 
+from minimatrix.cross_signing import ensure_device_cross_signed
 from minimatrix.matrix_client import MatrixClientHandler
+
+CROSS_SIGNING_SEED_INFO: str = "wachtmeater cross-signing {usage}"
+"""HMAC message per key usage for the cross-signing keys — changing it changes the bot's identity."""
 
 
 class MatrixMessagingAdapter:
@@ -95,7 +98,7 @@ class MatrixMessagingAdapter:
         try:
             if client.should_upload_keys:
                 await client.keys_upload()
-            await ensure_device_cross_signed(client, secret)
+            await ensure_device_cross_signed(client, secret, CROSS_SIGNING_SEED_INFO)
         except Exception as e:
             self.logger.error(f"Cross-Signing fehlgeschlagen: {e}")
 
