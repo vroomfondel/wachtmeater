@@ -1,15 +1,15 @@
-"""Tests for wachtmeater/operator.py.
+"""Tests for wachtmeater/operator.py."""
 
-Requires kubernetes (imported transitively via create_meater_watcher_job).
-"""
-
-from unittest.mock import MagicMock, patch
+import asyncio
+from collections.abc import Iterator
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from loguru import logger
 
-op = pytest.importorskip("wachtmeater.operator")
-
-from wachtmeater.operator import OperatorState  # noqa: E402  (must follow importorskip)
+from wachtmeater import cfg
+from wachtmeater import operator as op
+from wachtmeater.operator import OperatorState
 
 PITMASTER = "@pitmaster:matrix.example.com"
 OTHER_USER = "@stranger:matrix.example.com"
@@ -23,7 +23,7 @@ def state() -> OperatorState:
 @pytest.fixture(autouse=True)
 def _set_pitmaster(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default: pitmaster ACL is configured."""
-    monkeypatch.setattr(op.cfg.matrix, "pitmaster", PITMASTER)
+    monkeypatch.setattr(cfg.matrix, "pitmaster", PITMASTER)
 
 
 # ============================================================================
@@ -45,7 +45,7 @@ class TestACL:
         state: OperatorState,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(op.cfg.matrix, "pitmaster", "")
+        monkeypatch.setattr(cfg.matrix, "pitmaster", "")
         result = op.handle_operator_command("operator list", PITMASTER, state)
         assert result is not None
         assert "deaktiviert" in result.lower()
@@ -221,3 +221,53 @@ class TestFormatStatus:
         out = op._format_status(state)
         assert "Operator" in out
         assert "Aktive Watcher: 1/2" in out
+
+
+class TestTrustOwnDevices:
+    """``_trust_own_devices`` logs how many own devices are trusted and which are new."""
+
+    BOT = "@bot:matrix.example.com"
+
+    @pytest.fixture
+    def logs(self) -> Iterator[list[str]]:
+        lines: list[str] = []
+        logger.enable("wachtmeater")
+        sink = logger.add(lambda m: lines.append(m.rstrip("\n")), format="{message}", level="INFO")
+        yield lines
+        logger.remove(sink)
+        logger.disable("wachtmeater")
+
+    def _handler(self, devices: dict[str, bool], newly_seen: dict[str, bool] | None = None) -> MagicMock:
+        """Fake handler: *devices* known before, *newly_seen* appear with the key query; trust verifies all."""
+        store: dict[str, dict[str, MagicMock]] = {self.BOT: {}} if devices else {}
+        verified: dict[str, bool] = {}
+        for device_id, ok in devices.items():
+            store[self.BOT][device_id] = MagicMock(id=device_id)
+            verified[device_id] = ok
+
+        async def trust(user_id: str) -> None:
+            store.setdefault(user_id, {})
+            for device_id in newly_seen or {}:
+                store[user_id][device_id] = MagicMock(id=device_id)
+            for device_id in store[user_id]:
+                verified[device_id] = True
+
+        handler = MagicMock()
+        handler.client.device_store = store
+        handler.client.is_device_verified = lambda device: verified.get(device.id, False)
+        handler.trust_devices_for_user = AsyncMock(side_effect=trust)
+        return handler
+
+    def test_counts_all_and_lists_new_devices(self, logs: list[str]) -> None:
+        handler = self._handler({"OPERATOR": True, "WATCHER": False}, newly_seen={"NEWPOD": False})
+        asyncio.run(op._trust_own_devices(handler, self.BOT))
+        handler.trust_devices_for_user.assert_awaited_once_with(self.BOT)
+        assert logs == [f"Operator: vertraut 3 Device(s) von {self.BOT}, davon neu: NEWPOD, WATCHER"]
+
+    def test_nothing_new(self, logs: list[str]) -> None:
+        asyncio.run(op._trust_own_devices(self._handler({"OPERATOR": True}), self.BOT))
+        assert logs == [f"Operator: vertraut 1 Device(s) von {self.BOT}, keine neuen"]
+
+    def test_user_not_in_store_yet(self, logs: list[str]) -> None:
+        asyncio.run(op._trust_own_devices(self._handler({}, newly_seen={"FIRST": False}), self.BOT))
+        assert logs == [f"Operator: vertraut 1 Device(s) von {self.BOT}, davon neu: FIRST"]

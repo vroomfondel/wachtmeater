@@ -40,6 +40,7 @@ from datetime import datetime, timedelta, timezone
 from kubernetes import client
 from kubernetes.client import ApiException
 from loguru import logger
+from minimatrix.matrix_client import MatrixClientHandler
 
 from wachtmeater import cfg, read_dot_env_to_environ
 from wachtmeater.create_meater_watcher_job import (
@@ -273,6 +274,29 @@ def _format_status(state: OperatorState) -> str:
     )
 
 
+async def _trust_own_devices(handler: MatrixClientHandler, user_id: str) -> None:
+    """Trust all devices of *user_id* and log how many there are and which are new.
+
+    Args:
+        handler: The minimatrix client handler of the operator.
+        user_id: The bot's own MXID (shared with the watcher pods).
+    """
+    nio_client = handler.client
+
+    def verified() -> set[str]:
+        devices = nio_client.device_store[user_id] if user_id in nio_client.device_store else {}
+        return {device_id for device_id, device in devices.items() if nio_client.is_device_verified(device)}
+
+    before = verified()
+    await handler.trust_devices_for_user(user_id)
+    after = verified()
+    new = sorted(after - before)
+    logger.info(
+        f"Operator: vertraut {len(after)} Device(s) von {user_id}"
+        + (f", davon neu: {', '.join(new)}" if new else ", keine neuen")
+    )
+
+
 async def event_loop() -> None:
     """Run the operator's Matrix listener until interrupted.
 
@@ -321,8 +345,7 @@ async def event_loop() -> None:
     handler = getattr(messaging, "_handler", None)
     if handler is not None and hasattr(handler, "trust_devices_for_user"):
         try:
-            await handler.trust_devices_for_user(bot_mxid)
-            logger.info(f"Operator: vertraut allen Devices von {bot_mxid}")
+            await _trust_own_devices(handler, bot_mxid)
         except Exception as e:
             logger.warning(f"trust_devices_for_user fehlgeschlagen: {e}")
 
