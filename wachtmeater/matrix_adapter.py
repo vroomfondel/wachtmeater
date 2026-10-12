@@ -67,19 +67,19 @@ class MatrixMessagingAdapter:
 
     async def connect(self) -> None:
         """Authenticate, import old E2EE keys, and perform an initial sync."""
-        login_kwargs: dict[str, str | None] = {
-            "auth_method": cfg.auth.method,
-            "password": cfg.matrix.password,
-        }
-        if cfg.auth.method == "jwt":
-            login_kwargs.update(
-                keycloak_url=cfg.auth.keycloak_url,
-                keycloak_realm=cfg.auth.keycloak_realm,
-                keycloak_client_id=cfg.auth.keycloak_client_id,
-                keycloak_client_secret=cfg.auth.keycloak_client_secret,
-                jwt_login_type=cfg.auth.jwt_login_type,
-            )
-        await self._handler.login(**login_kwargs)  # type: ignore[arg-type]
+        jwt = cfg.auth.method == "jwt"
+        await self._handler.login(
+            cfg.auth.method,
+            cfg.matrix.password,
+            keycloak_url=cfg.auth.keycloak_url if jwt else None,
+            keycloak_realm=cfg.auth.keycloak_realm if jwt else None,
+            keycloak_client_id=cfg.auth.keycloak_client_id if jwt else None,
+            keycloak_client_secret=cfg.auth.keycloak_client_secret if jwt else None,
+            jwt_login_type=cfg.auth.jwt_login_type if jwt else None,
+            # Cross-signing runs in _cross_sign_device with the bot's own
+            # seed_info; minimatrix's default would give it a new identity.
+            self_sign_keys=False,
+        )
         await self._handler.import_keys_from_old_stores(delete_old=True)
         await self._handler.initial_sync(auto_join=True)
         await self._cross_sign_device()

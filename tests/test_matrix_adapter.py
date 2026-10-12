@@ -5,12 +5,14 @@ Requires minimatrix/nio (imported at module level by matrix_adapter).
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
 
+from minimatrix.matrix_client import MatrixClientHandler
 from nio.exceptions import LocalProtocolError
 
+from wachtmeater import cfg
 from wachtmeater import matrix_adapter as ma
 
 
@@ -26,6 +28,33 @@ def _make_adapter() -> Any:
     adapter._handler.stop_sync = MagicMock()
     adapter._stop_requested = False
     return adapter
+
+
+class TestConnect:
+    """``connect`` calls the real minimatrix API (autospec catches signature changes)."""
+
+    def _connect(self, method: str) -> Any:
+        adapter = ma.MatrixMessagingAdapter.__new__(ma.MatrixMessagingAdapter)
+        adapter._handler = create_autospec(MatrixClientHandler, instance=True)
+        with (
+            patch.object(cfg.auth, "method", method),
+            patch.object(cfg.matrix, "cross_signing_secret", ""),
+        ):
+            asyncio.run(adapter.connect())
+        return adapter._handler
+
+    def test_password_login_leaves_cross_signing_to_the_adapter(self) -> None:
+        handler = self._connect("password")
+        handler.login.assert_awaited_once()
+        assert handler.login.await_args.kwargs["self_sign_keys"] is False
+        assert handler.login.await_args.kwargs["keycloak_url"] is None
+        handler.import_keys_from_old_stores.assert_awaited_once_with(delete_old=True)
+        handler.initial_sync.assert_awaited_once_with(auto_join=True)
+
+    def test_jwt_login_passes_keycloak_settings(self) -> None:
+        with patch.object(cfg.auth, "keycloak_url", "https://kc.example"):
+            handler = self._connect("jwt")
+        assert handler.login.await_args.kwargs["keycloak_url"] == "https://kc.example"
 
 
 class TestStartSyncResilience:
