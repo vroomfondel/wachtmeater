@@ -238,7 +238,7 @@ class Replay:
         while self.idx < until:
             idx = self.idx
 
-            def _send(text: str, image: str | None, _idx: int = idx) -> None:
+            def _send(text: str, image: str | None, _idx: int = idx, *, html: str | None = None) -> None:
                 self.messages.append((_idx, text))
 
             def _call(text: str, _idx: int = idx) -> bool:

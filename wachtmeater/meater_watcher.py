@@ -15,7 +15,8 @@ The watcher is split into modules:
 * ``wachtmeater.watcher_settings`` — settings derived from the config.
 * ``wachtmeater.alerting`` — alert message + SIP call delivery.
 * ``wachtmeater.signal_stats`` — trend, stall rate, disturbance detection.
-* ``wachtmeater.status_text`` — remaining-time lines and alert summary.
+* ``wachtmeater.status_text`` — remaining-time rows and alert summary.
+* ``wachtmeater.status_table`` — status messages as plain text and HTML table.
 * ``wachtmeater.core_forecast`` — end-phase forecast (exponential fit).
 
 This module fetches the MEATER data, runs the periodic check with all
@@ -32,11 +33,13 @@ from loguru import logger
 
 from wachtmeater import alerting, cfg, read_dot_env_to_environ, timeutil, watcher_state
 from wachtmeater.alerting import SyncSender, deliver_once, send_alert
-from wachtmeater.commands import HELP_TEXT, handle_command
+from wachtmeater.commands import HELP, HELP_TEXT, handle_command
+from wachtmeater.help_table import html_with_help
 from wachtmeater.meater_monitor import MeaterData
 from wachtmeater.messaging import MessagingBackend
 from wachtmeater.signal_stats import append_sample, detect_disturbance, slope_per_hour, trend_window
-from wachtmeater.status_text import alert_summary, eta_lines
+from wachtmeater.status_table import StatusMessage, StatusRow
+from wachtmeater.status_text import alert_rows, eta_rows
 from wachtmeater.watcher_settings import (
     AMBIENT_TEMP_DROP_THRESHOLD,
     COOKEND_ERROR_THRESHOLD,
@@ -208,17 +211,20 @@ def run_meater_check(
         last_ambient = state.last_ambient_temp
         offline_minutes = state.offline_streak * (effective_check_interval(state) // 60)
 
-        lines = [f"⚠ MEATER Station offline (Cycle {state.offline_streak}, ~{offline_minutes} Min.)"]
+        rows = []
         if last_internal is not None:
-            lines.append(f"Letzter Internal: {last_internal:.1f} C")
+            rows.append(StatusRow("Letzter Internal", f"{last_internal:.1f} C"))
         if last_ambient is not None:
-            lines.append(f"Letzter Ambient: {last_ambient:.1f} C")
-        lines.append(f"Time: {timestamp}")
-        offline_msg = "\n".join(lines)
+            rows.append(StatusRow("Letzter Ambient", f"{last_ambient:.1f} C"))
+        rows.append(StatusRow("Time", timestamp))
+        offline = StatusMessage(
+            f"⚠ MEATER Station offline (Cycle {state.offline_streak}, ~{offline_minutes} Min.)", (tuple(rows),)
+        )
+        offline_msg = offline.text
 
         # Post to Matrix once per outage — retried on the next offline cycle
         # if it did not get through.
-        if not state.offline_notified and send_alert(send, offline_msg):
+        if not state.offline_notified and send_alert(send, offline_msg, html=offline.html):
             state.offline_notified = True
 
         # SIP-escalate once per outage when threshold is reached.
@@ -286,37 +292,56 @@ def run_meater_check(
     effective_target = state.target_override if state.target_override is not None else target_temp
 
     # Build status text
-    lines = [f"MEATER Status: {cook_name}", f"URL: {MEATER_URL}"]
+    rows = [StatusRow("URL", MEATER_URL)]
     if current_internal is not None:
-        lines.append(f"Internal (Fleisch): {current_internal:.1f} C")
+        rows.append(StatusRow("Internal (Fleisch)", f"{current_internal:.1f} C"))
     if current_ambient is not None:
-        lines.append(f"Ambient (Rauch): {current_ambient:.1f} C")
+        rows.append(StatusRow("Ambient (Rauch)", f"{current_ambient:.1f} C"))
     if state.target_override is not None:
         meater_target = f"{target_temp:.1f} C" if target_temp is not None else "unbekannt"
-        lines.append(f"Target: {meater_target} (MEATER) → Pull bei {state.target_override:.1f} C (aktiv)")
+        pull = f"{state.target_override:.1f} C"
+        rows.append(
+            StatusRow(
+                "Target",
+                f"{pull} (Pull, aktiv)",
+                (f"MEATER: {meater_target}",),
+                plain=f"Target: {meater_target} (MEATER) → Pull bei {pull} (aktiv)",
+            )
+        )
     elif target_temp is not None:
-        lines.append(f"Target: {target_temp:.1f} C")
+        rows.append(StatusRow("Target", f"{target_temp:.1f} C"))
     if warming_up:
-        lines.append(f"Max Ambient: Anheizphase, erfasst ab Kern {TEMPDOWN_WARMUP_CORE_TEMP:g} C")
+        since = f"erfasst ab Kern {TEMPDOWN_WARMUP_CORE_TEMP:g} C"
+        rows.append(StatusRow("Max Ambient", "Anheizphase", (since,), plain=f"Max Ambient: Anheizphase, {since}"))
     elif max_ambient is not None:
-        lines.append(f"Max Ambient: {max_ambient:.1f} C")
+        rows.append(StatusRow("Max Ambient", f"{max_ambient:.1f} C"))
     if max_internal is not None:
-        lines.append(f"Max Internal: {max_internal:.1f} C")
-    eta_block = eta_lines(state, now, data, current_internal, effective_target)
-    lines.extend(eta_block)
+        rows.append(StatusRow("Max Internal", f"{max_internal:.1f} C"))
+    eta_block = eta_rows(state, now, data, current_internal, effective_target)
+    rows.extend(eta_block)
     if elapsed:
-        lines.append(f"Elapsed: {elapsed}")
-    lines.append(f"Status: {cook_status}")
+        rows.append(StatusRow("Elapsed", str(elapsed)))
+    rows.append(StatusRow("Status", str(cook_status)))
     # Only worth a line when we fell back — it explains why the decimals
     # suddenly went away.
     if data.get("source") == "browser":
-        lines.append("Quelle: Browser-Fallback (nur ganze Grad)")
+        rows.append(
+            StatusRow(
+                "Quelle", "Browser-Fallback", ("nur ganze Grad",), plain="Quelle: Browser-Fallback (nur ganze Grad)"
+            )
+        )
     if pause_ended:
-        lines.append("Pause beendet: TempDown/Stall/Ambient-Bereich wieder aktiv, Max-Ambient zurueckgesetzt.")
-    lines.append("---")
-    lines.extend(alert_summary(state))
-    lines.append(f"Time: {timestamp}")
-    status_text = "\n".join(lines)
+        rows.append(
+            StatusRow(
+                "Pause",
+                "beendet",
+                ("TempDown/Stall/Ambient-Bereich wieder aktiv", "Max-Ambient zurueckgesetzt"),
+                plain="Pause beendet: TempDown/Stall/Ambient-Bereich wieder aktiv, Max-Ambient zurueckgesetzt.",
+            )
+        )
+    time_row = StatusRow("Time", timestamp)
+    status = StatusMessage(f"MEATER Status: {cook_name}", (tuple(rows), (*alert_rows(state), time_row)))
+    status_text = status.text
 
     logger.info(f"Status:\n{status_text}")
 
@@ -324,14 +349,15 @@ def run_meater_check(
     if send is not None:
         try:
             if eta_only:
-                eta_head = [f"MEATER ETA: {cook_name}"]
+                eta_head = []
                 if current_internal is not None:
-                    eta_head.append(f"Internal (Fleisch): {current_internal:.1f} C")
+                    eta_head.append(StatusRow("Internal (Fleisch)", f"{current_internal:.1f} C"))
                 if effective_target is not None:
-                    eta_head.append(f"Target: {effective_target:.1f} C")
-                send("\n".join(eta_head + eta_block + [f"Time: {timestamp}"]), None)
+                    eta_head.append(StatusRow("Target", f"{effective_target:.1f} C"))
+                eta_msg = StatusMessage(f"MEATER ETA: {cook_name}", ((*eta_head, *eta_block, time_row),))
+                send(eta_msg.text, None, html=eta_msg.html)
             else:
-                send(status_text, screenshot)
+                send(status_text, screenshot, html=status.html)
         except Exception as e:
             logger.error(f"Matrix: unexpected error ({e})")
 
@@ -630,7 +656,7 @@ async def event_loop(
         greeting_rooms = room_ids if room_ids else messaging.get_rooms()
     for rid in greeting_rooms:
         try:
-            await messaging.send_message(rid, startup_msg)
+            await messaging.send_message(rid, startup_msg, html=html_with_help(startup_msg, HELP))
         except Exception as e:
             logger.warning(f"Startup-Gruss konnte nicht gesendet werden an {rid}: {e}")
 
@@ -639,7 +665,7 @@ async def event_loop(
     # Build synchronous sender closure for run_meater_check
     loop = asyncio.get_running_loop()
 
-    def _send_via_messaging(text: str, image_path: str | None) -> None:
+    def _send_via_messaging(text: str, image_path: str | None, /, *, html: str | None = None) -> None:
         """Send text and optional image to all target rooms synchronously.
 
         Bridges the sync ``run_meater_check`` world to the async messaging
@@ -650,13 +676,14 @@ async def event_loop(
         Args:
             text: Message body to send.
             image_path: Optional filesystem path to an image to attach.
+            html: Optional HTML rendering of *text* (``formatted_body``).
 
         Raises:
             Exception: If the text could not be delivered to every target room.
         """
         targets = room_ids if room_ids else messaging.get_rooms()
         for rid in targets:
-            fut = asyncio.run_coroutine_threadsafe(messaging.send_message(rid, text, strict=True), loop)
+            fut = asyncio.run_coroutine_threadsafe(messaging.send_message(rid, text, strict=True, html=html), loop)
             fut.result(timeout=30)
             if image_path:
                 fut2 = asyncio.run_coroutine_threadsafe(messaging.send_image(rid, image_path), loop)
@@ -737,7 +764,7 @@ async def event_loop(
 
         # Regular response — post back to the room
         try:
-            await messaging.send_message(incoming_room_id, response)
+            await messaging.send_message(incoming_room_id, response, html=html_with_help(response, HELP))
         except Exception as e:
             logger.error(f"Matrix: Fehler beim Antworten: {e}")
 

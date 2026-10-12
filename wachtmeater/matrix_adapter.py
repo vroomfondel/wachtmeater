@@ -12,6 +12,7 @@ Env vars (from .env):
     MATRIX_PASSWORD     — password
     CRYPTO_STORE_PATH   — persistent dir for nio SQLite stores (default: /data/crypto_store)
     AUTH_METHOD         — password or jwt (default: password)
+    MATRIX_CROSS_SIGNING_SECRET — derives the cross-signing keys; empty = no self-signing
 """
 
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import ClassVar
 from nio import RoomSendError, UploadResponse
 from nio.exceptions import LocalProtocolError
 
+from wachtmeater.cross_signing import ensure_device_cross_signed
 from wachtmeater.messaging import MessageCallback, MessageSendError, RoomSelection
 
 from wachtmeater import cfg, read_dot_env_to_environ
@@ -77,6 +79,25 @@ class MatrixMessagingAdapter:
         await self._handler.login(**login_kwargs)  # type: ignore[arg-type]
         await self._handler.import_keys_from_old_stores(delete_old=True)
         await self._handler.initial_sync(auto_join=True)
+        await self._cross_sign_device()
+
+    async def _cross_sign_device(self) -> None:
+        """Sign this device with the account's cross-signing keys (if a secret is configured).
+
+        Failures are only logged: the bot works without it, its messages are
+        just flagged as sent from an unverified device.
+        """
+        secret = cfg.matrix.cross_signing_secret
+        if not secret:
+            self.logger.info("Cross-Signing aus (matrix.cross_signing_secret nicht gesetzt)")
+            return
+        client = self._handler.client
+        try:
+            if client.should_upload_keys:
+                await client.keys_upload()
+            await ensure_device_cross_signed(client, secret)
+        except Exception as e:
+            self.logger.error(f"Cross-Signing fehlgeschlagen: {e}")
 
     async def get_or_create_room(
         self,
@@ -257,35 +278,47 @@ class MatrixMessagingAdapter:
         user_id: str = getattr(self._handler.client, "user_id", cfg.matrix.user)
         return user_id
 
-    async def send_message(self, room_id: str, text: str, *, strict: bool = False) -> None:
+    async def send_message(self, room_id: str, text: str, *, strict: bool = False, html: str | None = None) -> None:
         """Trust devices in *room_id* and send a text message.
 
         Args:
             room_id: Target Matrix room ID.
-            text: Message body.
+            text: Message body (plain text; the fallback when *html* is set).
             strict: When ``True``, bypass minimatrix's error-swallowing
                 ``send_message`` and raise ``MessageSendError`` if the
                 homeserver rejects the event (``RoomSendError``) or the send
                 raises.  Used for alerts, which must be retried on failure.
+            html: Optional ``org.matrix.custom.html`` rendering of *text*,
+                sent as ``formatted_body`` (minimatrix cannot send it, so
+                this also bypasses its ``send_message``).  Without *strict*
+                a failed delivery is only logged.
 
         Raises:
             MessageSendError: Only with *strict*, when delivery failed.
         """
         await self._handler.trust_devices_in_room(room_id)
-        if not strict:
+        if not strict and html is None:
             await self._handler.send_message(room_id, text)
             return
+        content = {"msgtype": "m.text", "body": text}
+        if html is not None:
+            content |= {"format": "org.matrix.custom.html", "formatted_body": html}
         try:
             resp = await self._handler.client.room_send(
                 room_id=room_id,
                 message_type="m.room.message",
-                content={"msgtype": "m.text", "body": text},
+                content=content,
                 ignore_unverified_devices=True,
             )
         except Exception as e:
-            raise MessageSendError(f"Senden an {room_id} fehlgeschlagen: {e}") from e
+            if strict:
+                raise MessageSendError(f"Senden an {room_id} fehlgeschlagen: {e}") from e
+            logger.error(f"Senden an {room_id} fehlgeschlagen: {e}")
+            return
         if isinstance(resp, RoomSendError):
-            raise MessageSendError(f"Senden an {room_id} abgelehnt: {resp.message} ({resp.status_code})")
+            if strict:
+                raise MessageSendError(f"Senden an {room_id} abgelehnt: {resp.message} ({resp.status_code})")
+            logger.error(f"Senden an {room_id} abgelehnt: {resp.message} ({resp.status_code})")
 
     async def send_image(self, room_id: str, image_path: str, filename: str | None = None) -> None:
         """Upload and send an image to a Matrix room.

@@ -78,11 +78,13 @@ class MessagingBackend(Protocol):
         """Return the bot's own user identifier."""
         ...
 
-    async def send_message(self, room_id: str, text: str, *, strict: bool = False) -> None:
+    async def send_message(self, room_id: str, text: str, *, strict: bool = False, html: str | None = None) -> None:
         """Send a text message to the given room.
 
         With *strict* set, a failed delivery raises ``MessageSendError``
         instead of only being logged, so callers (alerts) can retry.
+        *html* is an optional rich-text rendering of *text* (e.g. the help
+        as a table); *text* stays the plain fallback.
         """
         ...
 

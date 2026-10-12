@@ -66,6 +66,7 @@ from loguru import logger
 
 from wachtmeater import cfg, timeutil, watcher_state
 from wachtmeater.alerting import clear_pending_call
+from wachtmeater.help_table import HelpTable
 from wachtmeater.status_text import endphase_earliest
 from wachtmeater.timeutil import clock, last_clock_time
 from wachtmeater.watcher_settings import (
@@ -86,49 +87,66 @@ from wachtmeater.watcher_state import WatcherState, effective_pit_temp, end_paus
 # Help text
 # ---------------------------------------------------------------------------
 
-HELP_TEXT: str = f"""\
-MEATER Watcher Befehle:
-
-status                    - Aktuellen Status abrufen
-eta                       - Nur Restzeit/Prognosen abrufen (MEATER-Restzeit, Watcher-Trend, Endphase)
-enable tempdown           - Temperaturabfall-Alert AN
-disable tempdown          - Temperaturabfall-Alert AUS
-enable ruhephase <temp>   - Ruhephase-Alert AN (Zieltemp in C; schaltet TempDown automatisch AUS, Wrap-Reminder + Stall stumm)
-disable ruhephase         - Ruhephase-Alert AUS
-enable stall [<rate>]     - Stall-Erkennung AN (opt: Schwelle in C/h, Standard {cfg.alerts.stall_max_rate:g}; Alarm wenn der Kern
-                            ueber {STALL_WINDOW_MINUTES} Min. langsamer steigt, nur bei {STALL_CORE_MIN:g}-{STALL_CORE_MAX:g} C,
-                            Abfall zaehlt nicht)
-disable stall             - Stall-Erkennung AUS
-enable wrap <temp>        - Wrap-Reminder AN (bei Kerntemp in C)
-disable wrap              - Wrap-Reminder AUS
-enable pull <temp>        - Rausnehmen-Alarm AN (override MEATER-Zieltemp, Nachricht + Anruf)
-disable pull              - Rausnehmen-Alarm AUS (wieder MEATER-Zieltemp)
-enable ambient <min> <max>- Ambient-Bereich AN (min/max C)
-disable ambient           - Ambient-Bereich AUS
-enable cookend            - Cook-Ende-Erkennung AN
-disable cookend           - Cook-Ende-Erkennung AUS
-enable offline            - Station-Offline-Alert AN
-disable offline           - Station-Offline-Alert AUS
-reset stall               - Stall-Alert zuruecksetzen
-reset wrap                - Wrap-Alert zuruecksetzen
-reset ambient             - Max-Ambient-Hoechstwert zuruecksetzen
-pause [<min>]             - Deckel auf/Wrappen: TempDown, Stall, Ambient-Bereich stumm (Standard {PAUSE_DEFAULT_MINUTES} Min.),
-                            danach Max-Ambient automatisch zurueckgesetzt (Pull/Offline/Cook-Ende bleiben aktiv)
-wrapped [<min>]           - Markiert Wrap als erledigt und startet die Endphasen-Prognose (Fit ab {ENDPHASE_SETTLE_MINUTES} Min.
-                            nach dem Wrap, A = Pit); mit <min> zusaetzlich wie pause
-wrapped at HH:MM          - Wrap nachtragen: wie wrapped, aber rueckdatiert auf HH:MM (ohne Pause)
-trend ab HH:MM            - Trend + Stall-Rate erst ab HH:MM auswerten (z.B. nach Hitzespitze); 'trend reset' hebt auf
-set pit <temp>            - Echte Smokertemperatur in C fuer die Endphasen-Prognose (Standard {PIT_TEMP_DEFAULT:g})
-reset pit                 - Smokertemperatur auf Standard zuruecksetzen
-resume                    - Pause vorzeitig beenden
-testcall [<text>]         - Testanruf bei Pitmaster mit beliebigem Text
-set interval <sek>        - Check-Intervall in Sekunden setzen
-reset interval            - Check-Intervall auf Standard zuruecksetzen
-enable startcall          - Startup-Testanruf beim Start AN
-disable startcall         - Startup-Testanruf beim Start AUS
-hilfe / help / /help      - Diese Hilfe anzeigen
-stop / quit / beenden     - Watcher beenden\
-"""
+HELP = HelpTable(
+    "MEATER Watcher Befehle:",
+    (
+        ("status", "Aktuellen Status abrufen"),
+        ("eta", "Nur Restzeit/Prognosen abrufen (MEATER-Restzeit, Watcher-Trend, Endphase)"),
+        ("enable tempdown", "Temperaturabfall-Alert AN"),
+        ("disable tempdown", "Temperaturabfall-Alert AUS"),
+        (
+            "enable ruhephase <temp>",
+            "Ruhephase-Alert AN (Zieltemp in C; schaltet TempDown automatisch AUS, Wrap-Reminder + Stall stumm)",
+        ),
+        ("disable ruhephase", "Ruhephase-Alert AUS"),
+        (
+            "enable stall [<rate>]",
+            f"Stall-Erkennung AN (opt: Schwelle in C/h, Standard {cfg.alerts.stall_max_rate:g}; Alarm wenn der Kern "
+            f"ueber {STALL_WINDOW_MINUTES} Min. langsamer steigt, nur bei {STALL_CORE_MIN:g}-{STALL_CORE_MAX:g} C, "
+            "Abfall zaehlt nicht)",
+        ),
+        ("disable stall", "Stall-Erkennung AUS"),
+        ("enable wrap <temp>", "Wrap-Reminder AN (bei Kerntemp in C)"),
+        ("disable wrap", "Wrap-Reminder AUS"),
+        ("enable pull <temp>", "Rausnehmen-Alarm AN (override MEATER-Zieltemp, Nachricht + Anruf)"),
+        ("disable pull", "Rausnehmen-Alarm AUS (wieder MEATER-Zieltemp)"),
+        ("enable ambient <min> <max>", "Ambient-Bereich AN (min/max C)"),
+        ("disable ambient", "Ambient-Bereich AUS"),
+        ("enable cookend", "Cook-Ende-Erkennung AN"),
+        ("disable cookend", "Cook-Ende-Erkennung AUS"),
+        ("enable offline", "Station-Offline-Alert AN"),
+        ("disable offline", "Station-Offline-Alert AUS"),
+        ("reset stall", "Stall-Alert zuruecksetzen"),
+        ("reset wrap", "Wrap-Alert zuruecksetzen"),
+        ("reset ambient", "Max-Ambient-Hoechstwert zuruecksetzen"),
+        (
+            "pause [<min>]",
+            f"Deckel auf/Wrappen: TempDown, Stall, Ambient-Bereich stumm (Standard {PAUSE_DEFAULT_MINUTES} Min.), "
+            "danach Max-Ambient automatisch zurueckgesetzt (Pull/Offline/Cook-Ende bleiben aktiv)",
+        ),
+        (
+            "wrapped [<min>]",
+            f"Markiert Wrap als erledigt und startet die Endphasen-Prognose (Fit ab {ENDPHASE_SETTLE_MINUTES} Min. "
+            "nach dem Wrap, A = Pit); mit <min> zusaetzlich wie pause",
+        ),
+        ("wrapped at HH:MM", "Wrap nachtragen: wie wrapped, aber rueckdatiert auf HH:MM (ohne Pause)"),
+        (
+            "trend ab HH:MM",
+            "Trend + Stall-Rate erst ab HH:MM auswerten (z.B. nach Hitzespitze); 'trend reset' hebt auf",
+        ),
+        ("set pit <temp>", f"Echte Smokertemperatur in C fuer die Endphasen-Prognose (Standard {PIT_TEMP_DEFAULT:g})"),
+        ("reset pit", "Smokertemperatur auf Standard zuruecksetzen"),
+        ("resume", "Pause vorzeitig beenden"),
+        ("testcall [<text>]", "Testanruf bei Pitmaster mit beliebigem Text"),
+        ("set interval <sek>", "Check-Intervall in Sekunden setzen"),
+        ("reset interval", "Check-Intervall auf Standard zuruecksetzen"),
+        ("enable startcall", "Startup-Testanruf beim Start AN"),
+        ("disable startcall", "Startup-Testanruf beim Start AUS"),
+        ("hilfe / help / /help", "Diese Hilfe anzeigen"),
+        ("stop / quit / beenden", "Watcher beenden"),
+    ),
+)
+HELP_TEXT: str = HELP.text
 
 
 def mark_wrapped(state: WatcherState, wrapped_at: float) -> str:

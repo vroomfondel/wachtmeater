@@ -271,3 +271,42 @@ class TestStrictSendMessage:
         adapter._handler.client.room_send.side_effect = TimeoutError("gone")
         with pytest.raises(MessageSendError):
             asyncio.run(adapter.send_message("!r:x", "hi", strict=True))
+
+
+class TestHtmlSendMessage:
+    """send_message(html=...) sends a formatted_body next to the plain body."""
+
+    def _adapter(self) -> Any:
+        adapter = _make_adapter()
+        adapter._handler.trust_devices_in_room = AsyncMock()
+        adapter._handler.send_message = AsyncMock()
+        adapter._handler.client.room_send = AsyncMock(return_value=MagicMock())
+        return adapter
+
+    def test_html_is_sent_as_formatted_body(self) -> None:
+        adapter = self._adapter()
+        asyncio.run(adapter.send_message("!r:x", "hi", html="<b>hi</b>"))
+        adapter._handler.send_message.assert_not_called()
+        assert adapter._handler.client.room_send.call_args.kwargs["content"] == {
+            "msgtype": "m.text",
+            "body": "hi",
+            "format": "org.matrix.custom.html",
+            "formatted_body": "<b>hi</b>",
+        }
+
+    def test_non_strict_html_failure_is_only_logged(self) -> None:
+        from nio import RoomSendError
+
+        adapter = self._adapter()
+        adapter._handler.client.room_send.return_value = RoomSendError("rate limited", "M_LIMIT_EXCEEDED")
+        asyncio.run(adapter.send_message("!r:x", "hi", html="<b>hi</b>"))
+        adapter._handler.client.room_send.side_effect = TimeoutError("gone")
+        asyncio.run(adapter.send_message("!r:x", "hi", html="<b>hi</b>"))
+
+    def test_strict_html_failure_raises(self) -> None:
+        from wachtmeater.messaging import MessageSendError
+
+        adapter = self._adapter()
+        adapter._handler.client.room_send.side_effect = TimeoutError("gone")
+        with pytest.raises(MessageSendError):
+            asyncio.run(adapter.send_message("!r:x", "hi", strict=True, html="<b>hi</b>"))

@@ -1,15 +1,18 @@
-"""Text blocks of the status message: remaining-time lines and alert summary.
+"""Row blocks of the status message: remaining-time rows and alert summary.
 
-``eta_lines`` combines the MEATER estimate, the watcher's linear trend
+``eta_rows`` combines the MEATER estimate, the watcher's linear trend
 forecast and the end-phase forecast (``wachtmeater.core_forecast``) — or,
 during the rest phase, the cooling forecast to the rest target;
-``alert_summary`` lists the alert settings and their state.
+``alert_rows`` lists the alert settings and their state.  Rows carry a short
+label/value for the HTML table plus the classic plain-text line
+(``wachtmeater.status_table``).
 """
 
 from wachtmeater import timeutil
 from wachtmeater.core_forecast import MAX_ETA_HOURS, Reading, fit_fixed_ambient, thin
 from wachtmeater.meater_monitor import MeaterData
 from wachtmeater.signal_stats import slope_per_hour, trend_window
+from wachtmeater.status_table import StatusRow
 from wachtmeater.timeutil import clock
 from wachtmeater.watcher_settings import (
     AMBIENT_TEMP_DROP_THRESHOLD,
@@ -67,15 +70,17 @@ def endphase_earliest(state: WatcherState) -> float | None:
     return state.wrapped_at + ENDPHASE_SETTLE_MINUTES * 60
 
 
-def endphase_lines(state: WatcherState, now: float, current_internal: float | None, target: float | None) -> list[str]:
-    """Build the end-phase forecast line (exponential fit after the wrap).
+def endphase_rows(
+    state: WatcherState, now: float, current_internal: float | None, target: float | None
+) -> list[StatusRow]:
+    """Build the end-phase forecast row (exponential fit after the wrap).
 
     Newton's law with ``A`` = pit temperature over the readings from
     ``ENDPHASE_SETTLE_MINUTES`` after the wrap on; ``T0`` and ``c`` are
     fitted (robust, see ``wachtmeater.core_forecast``).  The ETA runs from
     the current reading; if that reading is an outlier (clearly off the
-    curve), it runs from the curve value instead and a second line shows the
-    ETA from the measured value.
+    curve), it runs from the curve value instead and a second plain-text
+    line (notes in HTML) shows the ETA from the measured value.
 
     Args:
         state: Watcher state holding the samples.
@@ -84,49 +89,76 @@ def endphase_lines(state: WatcherState, now: float, current_internal: float | No
         target: Effective pull target (override or MEATER target).
 
     Returns:
-        Status lines; empty before ``wrapped``, without a target or once the
+        One row; empty before ``wrapped``, without a target or once the
         target is reached.
     """
     start = endphase_earliest(state)
     if start is None or current_internal is None or not target or current_internal >= target:
         return []
+    label = "Endphasen-Prognose"
     pit = effective_pit_temp(state)
     min_span = ENDPHASE_MIN_MINUTES * 60
     readings: list[Reading] = [(p[0], p[1], None) for p in state.internal_samples if p[0] >= start]
     if len(readings) < 3 or readings[-1][0] - readings[0][0] < min_span:
         first = readings[0][0] if readings else max(start, now)
-        return [
-            f"Endphasen-Prognose: sammelt Daten (Fit ab {clock(start, now)}, "
-            f"erste Prognose fruehestens ~{clock(first + min_span, now)})"
-        ]
+        pending = (f"Fit ab {clock(start, now)}", f"erste Prognose fruehestens ~{clock(first + min_span, now)}")
+        return [StatusRow(label, "sammelt Daten", pending, plain=f"{label}: sammelt Daten ({', '.join(pending)})")]
     window = thin(readings, ENDPHASE_MAX_POINTS)
     t0, t_last = window[0][0], window[-1][0]
     fit = fit_fixed_ambient([(r[0] - t0) / 3600 for r in window], [r[1] for r in window], pit, target)
-    head = (
-        f"Endphasen-Prognose bis {target:.1f} C (A=Pit {pit:g} C, Fit {clock(t0, now)}-{clock(t_last, now)}, "
-        f"{len(window)} Punkte, RMS {fit.rms:.2f} C)"
-    )
+    fit_note = f"Fit {clock(t0, now)}-{clock(t_last, now)}, {len(window)} Punkte, RMS {fit.rms:.2f} C"
+    notes: tuple[str, ...] = (f"bis {target:.1f} C, A=Pit {pit:g} C", fit_note)
+    head = f"{label} bis {target:.1f} C (A=Pit {pit:g} C, {fit_note})"
     if fit.eta_hours is None:
-        return [f"{head}: nie (Pit <= Ziel)"]
-    if fit.eta_hours > MAX_ETA_HOURS:
-        return [f"{head}: nicht absehbar (Kern steigt kaum)"]
-    lines = [f"{head}: ~{clock(t_last + fit.eta_hours * 3600, now)}"]
-    if fit.last_deviates:
-        measured = fit.eta_hours_measured
-        eta = (
-            f"~{clock(t_last + measured * 3600, now)}"
-            if measured is not None and measured <= MAX_ETA_HOURS
-            else "nicht absehbar"
-        )
-        lines.append(
-            f"  Letzter Messwert {fit.core_measured:.1f} C weicht von der Kurve ({fit.core_model:.1f} C) ab "
-            f"(Ausreisser?), Prognose ab Kurvenwert; ab Messwert: {eta}"
-        )
-    return lines
+        value = "nie (Pit <= Ziel)"
+    elif fit.eta_hours > MAX_ETA_HOURS:
+        value = "nicht absehbar (Kern steigt kaum)"
+    else:
+        value = f"~{clock(t_last + fit.eta_hours * 3600, now)}"
+    plain = f"{head}: {value}"
+    if value.startswith("~") and fit.last_deviates:
+        notes, plain = _deviation(notes, plain, fit.core_measured, fit.core_model, fit.eta_hours_measured, t_last, now)
+    return [StatusRow(label, value, notes, plain=plain)]
 
 
-def restphase_lines(state: WatcherState, now: float, current_internal: float | None) -> list[str]:
-    """Build the rest-phase forecast line (exponential cooling fit).
+def _deviation(
+    notes: tuple[str, ...],
+    plain: str,
+    measured: float,
+    model: float,
+    eta_hours_measured: float | None,
+    t_last: float,
+    now: float,
+) -> tuple[tuple[str, ...], str]:
+    """Add the outlier hint (last reading off the fitted curve) to a forecast row.
+
+    Args:
+        notes: The row's notes so far.
+        plain: The row's plain text so far.
+        measured: Last measured core temperature.
+        model: Curve value at the last reading.
+        eta_hours_measured: ETA in hours from the measured value, if any.
+        t_last: Time of the last reading.
+        now: Current epoch seconds.
+
+    Returns:
+        The extended ``(notes, plain)``.
+    """
+    eta = (
+        f"~{clock(t_last + eta_hours_measured * 3600, now)}"
+        if eta_hours_measured is not None and eta_hours_measured <= MAX_ETA_HOURS
+        else "nicht absehbar"
+    )
+    notes += (f"Messwert {measured:.1f} C weicht ab (Kurve {model:.1f} C)", f"Ausreisser? Ab Messwert: {eta}")
+    plain += (
+        f"\n  Letzter Messwert {measured:.1f} C weicht von der Kurve ({model:.1f} C) ab "
+        f"(Ausreisser?), Prognose ab Kurvenwert; ab Messwert: {eta}"
+    )
+    return notes, plain
+
+
+def restphase_rows(state: WatcherState, now: float, current_internal: float | None) -> list[StatusRow]:
+    """Build the rest-phase forecast row (exponential cooling fit).
 
     Newton's law of cooling towards ``A`` = ``ROOM_TEMP`` over the readings
     from the core peak after ``enable ruhephase`` on (the carry-over rise
@@ -141,18 +173,25 @@ def restphase_lines(state: WatcherState, now: float, current_internal: float | N
         current_internal: Current core temperature.
 
     Returns:
-        Status lines; empty when the rest-phase alert is off, has no target,
-        the rest phase has not started or the target is reached.
+        One row; empty when the rest-phase alert is off, has no target, the
+        rest phase has not started or the target is reached.
     """
     target = state.ruhephase_target_temp
     if not state.tempalert_ruhephase_enabled or target is None or current_internal is None:
         return []
     if current_internal <= target:
         return []
+    label = "Ruhephasen-Prognose"
     anchor = state.ruhephase_started_at
     samples = [p for p in state.internal_samples if anchor is None or p[0] >= anchor]
     if not samples:
-        return [] if anchor is None else [f"Ruhephasen-Prognose bis {target:.1f} C: sammelt Daten"]
+        if anchor is None:
+            return []
+        return [
+            StatusRow(
+                label, "sammelt Daten", (f"bis {target:.1f} C",), plain=f"{label} bis {target:.1f} C: sammelt Daten"
+            )
+        ]
     peak = max(p[1] for p in samples)
     if anchor is None and peak - current_internal < 1.0:
         return []
@@ -161,40 +200,43 @@ def restphase_lines(state: WatcherState, now: float, current_internal: float | N
     readings: list[Reading] = [(p[0], p[1], None) for p in samples[peak_idx:]]
     min_span = RESTPHASE_MIN_MINUTES * 60
     if len(readings) < 3 or readings[-1][0] - readings[0][0] < min_span:
+        pending = (
+            f"bis {target:.1f} C",
+            f"Fit ab Kern-Maximum {peak:.1f} C um {clock(readings[0][0], now)}",
+            f"erste Prognose fruehestens ~{clock(readings[0][0] + min_span, now)}",
+        )
         return [
-            f"Ruhephasen-Prognose bis {target:.1f} C: sammelt Daten (Fit ab Kern-Maximum {peak:.1f} C um "
-            f"{clock(readings[0][0], now)}, erste Prognose fruehestens ~{clock(readings[0][0] + min_span, now)})"
+            StatusRow(
+                label,
+                "sammelt Daten",
+                pending,
+                plain=f"{label} {pending[0]}: sammelt Daten ({pending[1]}, {pending[2]})",
+            )
         ]
     window = thin(readings, ENDPHASE_MAX_POINTS)
     t0, t_last = window[0][0], window[-1][0]
     fit = fit_fixed_ambient(
         [(r[0] - t0) / 3600 for r in window], [r[1] for r in window], ROOM_TEMP, target, cooling=True
     )
-    head = (
-        f"Ruhephasen-Prognose bis {target:.1f} C (A=Umgebung {ROOM_TEMP:g} C, Fit {clock(t0, now)}-"
-        f"{clock(t_last, now)}, {len(window)} Punkte, RMS {fit.rms:.2f} C)"
-    )
+    fit_note = f"Fit {clock(t0, now)}-{clock(t_last, now)}, {len(window)} Punkte, RMS {fit.rms:.2f} C"
+    notes: tuple[str, ...] = (f"bis {target:.1f} C, A=Umgebung {ROOM_TEMP:g} C", fit_note)
+    head = f"{label} bis {target:.1f} C (A=Umgebung {ROOM_TEMP:g} C, {fit_note})"
     if fit.eta_hours is None:
-        return [f"{head}: nie (Umgebung >= Ziel)"]
-    if fit.eta_hours > MAX_ETA_HOURS:
-        return [f"{head}: nicht absehbar (Kern faellt kaum)"]
-    lines = [f"{head}: ~{clock(t_last + fit.eta_hours * 3600, now)}"]
-    if fit.last_deviates:
-        measured = fit.eta_hours_measured
-        eta = (
-            f"~{clock(t_last + measured * 3600, now)}"
-            if measured is not None and measured <= MAX_ETA_HOURS
-            else "nicht absehbar"
-        )
-        lines.append(
-            f"  Letzter Messwert {fit.core_measured:.1f} C weicht von der Kurve ({fit.core_model:.1f} C) ab "
-            f"(Ausreisser?), Prognose ab Kurvenwert; ab Messwert: {eta}"
-        )
-    return lines
+        value = "nie (Umgebung >= Ziel)"
+    elif fit.eta_hours > MAX_ETA_HOURS:
+        value = "nicht absehbar (Kern faellt kaum)"
+    else:
+        value = f"~{clock(t_last + fit.eta_hours * 3600, now)}"
+    plain = f"{head}: {value}"
+    if value.startswith("~") and fit.last_deviates:
+        notes, plain = _deviation(notes, plain, fit.core_measured, fit.core_model, fit.eta_hours_measured, t_last, now)
+    return [StatusRow(label, value, notes, plain=plain)]
 
 
-def forecast_line(state: WatcherState, now: float, current_internal: float | None, target: float | None) -> str | None:
-    """Build the watcher's own ETA forecast line to the pull target.
+def forecast_row(
+    state: WatcherState, now: float, current_internal: float | None, target: float | None
+) -> StatusRow | None:
+    """Build the watcher's own ETA forecast row to the pull target.
 
     Linear trend over the last ``FORECAST_WINDOW_MINUTES`` of core readings.
 
@@ -205,7 +247,7 @@ def forecast_line(state: WatcherState, now: float, current_internal: float | Non
         target: Effective pull target (override or MEATER target).
 
     Returns:
-        A clearly labelled forecast line, or ``None`` when there is no target,
+        A clearly labelled forecast row, or ``None`` when there is no target,
         not enough data, or no meaningful rise.
     """
     if current_internal is None or not target or current_internal >= target:
@@ -219,17 +261,23 @@ def forecast_line(state: WatcherState, now: float, current_internal: float | Non
     span = round((pts[-1][0] - pts[0][0]) / 60)
     hours = (target - current_internal) / rate
     when = "nicht absehbar (Kern steigt kaum)" if hours > MAX_ETA_HOURS else f"~{clock(now + hours * 3600, now)}"
-    return f"Watcher-Prognose bis {target:.1f} C: {when} (Trend {rate:.1f} C/h ueber {span} Min.)"
+    trend = f"Trend {rate:.1f} C/h ueber {span} Min."
+    return StatusRow(
+        "Watcher-Prognose",
+        when,
+        (f"bis {target:.1f} C", trend),
+        plain=f"Watcher-Prognose bis {target:.1f} C: {when} ({trend})",
+    )
 
 
-def eta_lines(
+def eta_rows(
     state: WatcherState,
     now: float,
     data: MeaterData,
     current_internal: float | None,
     target: float | None,
-) -> list[str]:
-    """Build all remaining-time lines: MEATER's estimate plus own forecasts.
+) -> list[StatusRow]:
+    """Build all remaining-time rows: MEATER's estimate plus own forecasts.
 
     Shared by the full status message and the compact ``eta`` reply.  During
     the rest phase the cooling forecast replaces the forecasts to the pull
@@ -243,133 +291,163 @@ def eta_lines(
         target: Effective pull target in C (override or MEATER target).
 
     Returns:
-        The ``Remaining:`` line, followed by the rest-phase forecast or the
-        watcher's trend forecast and the end-phase forecast block when
-        available.
+        The ``Remaining`` row, followed by the rest-phase forecast or the
+        watcher's trend forecast and the end-phase forecast when available.
     """
     remaining = data.get("remaining_time")
     if remaining_known(remaining, data.get("remaining_minutes")):
-        lines = [f"Remaining: {remaining}"]
+        rows = [StatusRow("Remaining", str(remaining))]
     else:
-        lines = ["Remaining: unbekannt (MEATER liefert gerade keine Restzeit)"]
-    rest = restphase_lines(state, now, current_internal)
+        note = "MEATER liefert gerade keine Restzeit"
+        rows = [StatusRow("Remaining", "unbekannt", (note,), plain=f"Remaining: unbekannt ({note})")]
+    rest = restphase_rows(state, now, current_internal)
     if rest:
-        return lines + rest
-    forecast = forecast_line(state, now, current_internal, target)
+        return rows + rest
+    forecast = forecast_row(state, now, current_internal, target)
     if forecast:
-        lines.append(forecast)
-    lines.extend(endphase_lines(state, now, current_internal, target))
-    return lines
+        rows.append(forecast)
+    rows.extend(endphase_rows(state, now, current_internal, target))
+    return rows
 
 
-def alert_summary(state: WatcherState) -> list[str]:
+def _flagged(
+    label: str, value: str, flags: list[str], *, notes: tuple[str, ...] = (), plain: str | None = None
+) -> StatusRow:
+    """Build a row whose state flags read ``[flag]`` in plain text and are notes in HTML.
+
+    Args:
+        label: Row label.
+        value: Row value.
+        flags: State flags, e.g. ``"bereits ausgeloest"``.
+        notes: Further HTML notes shown before the flags (already part of *plain*).
+        plain: Plain text before the flags; defaults to ``"label: value"``.
+
+    Returns:
+        The row.
+    """
+    base = plain if plain is not None else f"{label}: {value}"
+    return StatusRow(label, value, (*notes, *flags), plain=base + "".join(f" [{f}]" for f in flags))
+
+
+def alert_rows(state: WatcherState) -> list[StatusRow]:
     """Build a human-readable summary of all alert modes.
 
     Args:
         state: Current watcher state.
 
     Returns:
-        List of status lines, one per alert mode.
+        List of status rows, one per alert mode.
     """
-    lines = []
+    rows = []
 
     # Pause (wrap / lid open) — listed first, it mutes several alerts below
     if state.pause_until is not None:
-        lines.append(
-            f"Pause: AKTIV (noch {pause_minutes_left(state, timeutil.now())} Min.; TempDown, Stall und "
-            f"Ambient-Bereich stumm; 'resume' beendet)"
+        left = f"noch {pause_minutes_left(state, timeutil.now())} Min."
+        muted = "TempDown, Stall und Ambient-Bereich stumm"
+        rows.append(
+            StatusRow(
+                "Pause",
+                f"AKTIV ({left})",
+                (muted, "'resume' beendet"),
+                plain=f"Pause: AKTIV ({left}; {muted}; 'resume' beendet)",
+            )
         )
 
     # TempDown
     if state.tempalert_tempdown_enabled:
-        lines.append(f"TempDown: AN (Schwelle: {AMBIENT_TEMP_DROP_THRESHOLD} C)")
+        threshold = f"Schwelle: {AMBIENT_TEMP_DROP_THRESHOLD} C"
+        rows.append(StatusRow("TempDown", "AN", (threshold,), plain=f"TempDown: AN ({threshold})"))
     else:
-        lines.append("TempDown: AUS")
+        rows.append(StatusRow("TempDown", "AUS"))
 
     # Ruhephase
     if state.tempalert_ruhephase_enabled and state.ruhephase_target_temp is not None:
-        lines.append(f"Ruhephase: AN (Ziel: {state.ruhephase_target_temp} C)")
+        rows.append(StatusRow("Ruhephase", f"AN (Ziel: {state.ruhephase_target_temp} C)"))
     else:
-        lines.append("Ruhephase: AUS")
+        rows.append(StatusRow("Ruhephase", "AUS"))
 
     # Stall
     if state.tempalert_stall_enabled:
-        s = (
-            f"Stall: AN (Alarm bei < {state.stall_max_rate:g} C/h Anstieg ueber {STALL_WINDOW_MINUTES} Min., "
-            f"Kern {STALL_CORE_MIN:g}-{STALL_CORE_MAX:g} C)"
-        )
+        rate = f"< {state.stall_max_rate:g} C/h"
+        window = f"Anstieg ueber {STALL_WINDOW_MINUTES} Min., Kern {STALL_CORE_MIN:g}-{STALL_CORE_MAX:g} C"
+        flags = []
         if state.stall_alerted:
-            s += " [bereits ausgeloest]"
+            flags.append("bereits ausgeloest")
         if state.tempalert_ruhephase_enabled:
-            s += " [stumm in der Ruhephase]"
+            flags.append("stumm in der Ruhephase")
         elif state.stall_pause_checks_left > 0:
-            s += f" [pausiert nach Stoerung: noch {state.stall_pause_checks_left} Check(s)]"
-        lines.append(s)
+            flags.append(f"pausiert nach Stoerung: noch {state.stall_pause_checks_left} Check(s)")
+        rows.append(
+            _flagged("Stall", f"AN ({rate})", flags, notes=(window,), plain=f"Stall: AN (Alarm bei {rate} {window})")
+        )
     else:
-        lines.append("Stall: AUS")
+        rows.append(StatusRow("Stall", "AUS"))
 
     # Wrap
     if state.tempalert_wrap_enabled and state.wrap_target_temp is not None:
-        s = f"Wrap-Reminder: AN (bei {state.wrap_target_temp} C)"
+        flags = []
         if state.wrap_alerted:
-            s += " [bereits ausgeloest]"
+            flags.append("bereits ausgeloest")
         elif state.tempalert_ruhephase_enabled:
-            s += " [stumm in der Ruhephase]"
-        lines.append(s)
+            flags.append("stumm in der Ruhephase")
+        rows.append(_flagged("Wrap-Reminder", f"AN (bei {state.wrap_target_temp} C)", flags))
     else:
-        lines.append("Wrap-Reminder: AUS")
+        rows.append(StatusRow("Wrap-Reminder", "AUS"))
 
     # Pull / take-out target override (overrides the MEATER target)
+    label = "Pull-Alert (rausnehmen)"
     if state.target_override is not None:
-        s = f"Pull-Alert (rausnehmen): AN (Ziel: {state.target_override} C, override MEATER)"
-        if state.target_reached_calls >= 3:
-            s += " [bereits ausgeloest]"
-        lines.append(s)
+        target = f"Ziel: {state.target_override} C"
+        flags = ["bereits ausgeloest"] if state.target_reached_calls >= 3 else []
+        rows.append(
+            _flagged(
+                label,
+                f"AN ({target})",
+                flags,
+                notes=("override MEATER",),
+                plain=f"{label}: AN ({target}, override MEATER)",
+            )
+        )
     else:
-        lines.append("Pull-Alert (rausnehmen): AUS")
+        rows.append(StatusRow(label, "AUS"))
 
     # Ambient range
     if state.tempalert_ambient_range_enabled:
-        lines.append(f"Ambient-Bereich: AN ({state.ambient_range_min}-{state.ambient_range_max} C)")
+        rows.append(StatusRow("Ambient-Bereich", f"AN ({state.ambient_range_min}-{state.ambient_range_max} C)"))
     else:
-        lines.append("Ambient-Bereich: AUS")
+        rows.append(StatusRow("Ambient-Bereich", "AUS"))
 
     # Cook-end
     if state.tempalert_cookend_enabled:
-        s = "Cook-Ende: AN"
-        if state.cook_ended:
-            s += " [Cook beendet erkannt]"
-        lines.append(s)
+        rows.append(_flagged("Cook-Ende", "AN", ["Cook beendet erkannt"] if state.cook_ended else []))
     else:
-        lines.append("Cook-Ende: AUS")
+        rows.append(StatusRow("Cook-Ende", "AUS"))
 
     # Station offline
+    label = "Station-Offline-Alert"
     if state.tempalert_station_offline_enabled:
-        s = f"Station-Offline-Alert: AN (SIP nach {STATION_OFFLINE_CALL_THRESHOLD} Cycles)"
-        if state.offline_streak > 0:
-            s += f" [aktuell offline: {state.offline_streak} Cycle(s)]"
-        lines.append(s)
+        sip = f"SIP nach {STATION_OFFLINE_CALL_THRESHOLD} Cycles"
+        flags = [f"aktuell offline: {state.offline_streak} Cycle(s)"] if state.offline_streak > 0 else []
+        rows.append(_flagged(label, "AN", flags, notes=(sip,), plain=f"{label}: AN ({sip})"))
     else:
-        lines.append("Station-Offline-Alert: AUS")
+        rows.append(StatusRow(label, "AUS"))
 
     # Real smoker temperature for the end-phase forecast
     pit_src = "set pit" if state.pit_temp is not None else "Standard"
-    s = f"Smoker-Temp (Pit): {effective_pit_temp(state):g} C ({pit_src})"
-    if state.wrapped_at is not None:
-        s += f" [gewrappt {clock(state.wrapped_at, timeutil.now())}]"
-    lines.append(s)
+    flags = [f"gewrappt {clock(state.wrapped_at, timeutil.now())}"] if state.wrapped_at is not None else []
+    rows.append(_flagged("Smoker-Temp (Pit)", f"{effective_pit_temp(state):g} C ({pit_src})", flags))
 
     # Check interval
-    interval = effective_check_interval(state)
+    interval = f"{effective_check_interval(state)}s"
     if state.check_interval_override is not None:
-        lines.append(f"Check-Intervall: {interval}s (override; Standard {CHECK_INTERVAL}s)")
+        default = f"override; Standard {CHECK_INTERVAL}s"
+        rows.append(
+            StatusRow("Check-Intervall", interval, (default,), plain=f"Check-Intervall: {interval} ({default})")
+        )
     else:
-        lines.append(f"Check-Intervall: {interval}s")
+        rows.append(StatusRow("Check-Intervall", interval))
 
     # Startup test call (applies to the next watcher start)
-    if state.startup_test_call_enabled:
-        lines.append("Startup-Testanruf: AN")
-    else:
-        lines.append("Startup-Testanruf: AUS")
+    rows.append(StatusRow("Startup-Testanruf", "AN" if state.startup_test_call_enabled else "AUS"))
 
-    return lines
+    return rows

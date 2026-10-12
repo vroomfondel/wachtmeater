@@ -49,22 +49,28 @@ from wachtmeater.create_meater_watcher_job import (
     create_resources,
     delete_resources,
 )
+from wachtmeater.help_table import HelpTable, html_with_help
 from wachtmeater.messaging import MessagingBackend
 
 read_dot_env_to_environ()
 
 
-HELP_TEXT: str = """\
-Wachtmeater Operator Befehle:
-
-operator new <MEATER_URL>      - Neuen Watcher-Job starten
-operator resume <spec>         - Beendeten Watcher fortsetzen (URL, UUID, short, oder Listen-Index)
-operator restart <spec>        - Watcher neu starten, z.B. fuer neues Image (URL, UUID, short, oder Listen-Index)
-operator delete <spec>         - Watcher loeschen (URL, UUID, short, oder Listen-Index)
-operator list                  - Aktive Watcher auflisten
-operator status                - Operator-Health
-operator help / hilfe          - Diese Hilfe anzeigen\
-"""
+HELP = HelpTable(
+    "Wachtmeater Operator Befehle:",
+    (
+        ("operator new <MEATER_URL>", "Neuen Watcher-Job starten"),
+        ("operator resume <spec>", "Beendeten Watcher fortsetzen (URL, UUID, short, oder Listen-Index)"),
+        (
+            "operator restart <spec>",
+            "Watcher neu starten, z.B. fuer neues Image (URL, UUID, short, oder Listen-Index)",
+        ),
+        ("operator delete <spec>", "Watcher loeschen (URL, UUID, short, oder Listen-Index)"),
+        ("operator list", "Aktive Watcher auflisten"),
+        ("operator status", "Operator-Health"),
+        ("operator help / hilfe", "Diese Hilfe anzeigen"),
+    ),
+)
+HELP_TEXT: str = HELP.text
 
 
 class OperatorState:
@@ -422,16 +428,14 @@ async def event_loop() -> None:
             return
 
         # Plain string response (help text, error)
-        await messaging.send_message(operator_room, response)
+        await messaging.send_message(operator_room, response, html=html_with_help(response, HELP))
 
     messaging.register_message_callback(on_message)
 
     # Greeting
     try:
-        await messaging.send_message(
-            operator_room,
-            f"Wachtmeater Operator gestartet.\n\n{HELP_TEXT}",
-        )
+        greeting = f"Wachtmeater Operator gestartet.\n\n{HELP_TEXT}"
+        await messaging.send_message(operator_room, greeting, html=html_with_help(greeting, HELP))
     except Exception as e:
         logger.warning(f"Startup-Gruss fehlgeschlagen: {e}")
 

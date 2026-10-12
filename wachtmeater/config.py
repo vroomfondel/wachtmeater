@@ -448,6 +448,11 @@ class MatrixConfig(_EnvMixin):
         operator_crypto_store_path: Separate crypto store for the operator
             so it does not race with watcher pods on the same SQLite DB
             (``OPERATOR_CRYPTO_STORE_PATH``).
+        cross_signing_secret: Secret the bot account's cross-signing keys
+            are derived from; with it set, every bot device signs itself at
+            login so clients stop flagging its messages as sent from an
+            unverified device.  Must be the same for operator and watchers.
+            Empty disables cross-signing (``MATRIX_CROSS_SIGNING_SECRET``).
     """
 
     room: str = env("MATRIX_ROOM", default="!exampleroom:matrix.example.com")
@@ -462,6 +467,7 @@ class MatrixConfig(_EnvMixin):
     pitmaster_admin_in_cook_room: bool = env("MATRIX_PITMASTER_ADMIN", default=True)
     operator_listening_room: str = env("MATRIX_OPERATOR_LISTENING_ROOM", default="")
     operator_crypto_store_path: str = env("OPERATOR_CRYPTO_STORE_PATH", default="/data/operator_crypto_store")
+    cross_signing_secret: str = env("MATRIX_CROSS_SIGNING_SECRET", default="")
 
 
 @envdataclass

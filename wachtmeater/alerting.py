@@ -6,15 +6,20 @@ alert as done only then; the call is placed once.  Other modules call
 place.
 """
 
-from collections.abc import Callable
+from typing import Protocol
 
 from loguru import logger
 
 from wachtmeater import cfg
 from wachtmeater.watcher_state import WatcherState
 
-SyncSender = Callable[[str, str | None], None]
-"""Synchronous sender callable: ``(text, image_path_or_None) -> None``."""
+
+class SyncSender(Protocol):
+    """Synchronous sender callable: ``(text, image_path_or_None, *, html=None) -> None``."""
+
+    def __call__(self, text: str, image_path: str | None, /, *, html: str | None = None) -> None:
+        """Send *text* (plain body; *html* as optional ``formatted_body``) and an optional image."""
+        ...
 
 
 def call_pitmaster(message: str) -> bool:
@@ -38,7 +43,7 @@ def call_pitmaster(message: str) -> bool:
         return False
 
 
-def send_alert(send: SyncSender | None, text: str, image_path: str | None = None) -> bool:
+def send_alert(send: SyncSender | None, text: str, image_path: str | None = None, *, html: str | None = None) -> bool:
     """Post an alert message to Matrix and report whether it was delivered.
 
     Args:
@@ -46,6 +51,7 @@ def send_alert(send: SyncSender | None, text: str, image_path: str | None = None
             (then there is nothing to deliver and the alert counts as sent).
         text: Alert message body.
         image_path: Optional image to attach.
+        html: Optional HTML rendering of *text* (``formatted_body``).
 
     Returns:
         ``True`` if the message was delivered (or there is no backend),
@@ -54,7 +60,7 @@ def send_alert(send: SyncSender | None, text: str, image_path: str | None = None
     if send is None:
         return True
     try:
-        send(text, image_path)
+        send(text, image_path, html=html)
         return True
     except Exception as e:
         logger.error(f"Matrix: Alarm-Nachricht nicht zugestellt ({e}) — neuer Versuch beim naechsten Check: {text!r}")

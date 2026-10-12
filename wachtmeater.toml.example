@@ -78,6 +78,10 @@ pitmaster = "@pit-claas-master:matrix.example.com"
 # Pitmaster im automatisch angelegten Cook-Raum zum Admin (PL 100) machen.
 # Wirkt nur bei neu erstellten Raeumen — bestehende bleiben unveraendert.
 pitmaster_admin_in_cook_room = true
+# Secret, aus dem der Bot seine Cross-Signing-Schluessel ableitet; damit signiert
+# er jedes eigene Geraet beim Login (sonst zeigt Element ein rotes "!" an seinen
+# Nachrichten). Fuer Operator und Watcher gleich setzen; leer = aus.
+# cross_signing_secret = ""
 
 [auth]
 method              = "jwt"

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from wachtmeater.config import AlertDefaultsConfig
+from wachtmeater.status_table import StatusRow
 from wachtmeater.watcher_state import WatcherState
 
 from wachtmeater import alerting, commands, signal_stats, status_text, timeutil, watcher_settings, watcher_state
@@ -32,15 +33,20 @@ def _field(state: WatcherState, name: str) -> object:
 
 
 # ============================================================================
-# alert_summary
+# alert_rows
 # ============================================================================
 
 
+def _lines(rows: list[StatusRow]) -> list[str]:
+    """Plain-text lines of status rows (a row may span several lines)."""
+    return [line for row in rows for line in row.text.splitlines()]
+
+
 class TestAlertSummary:
-    """Tests for status_text.alert_summary(state)."""
+    """Tests for status_text.alert_rows(state)."""
 
     def test_defaults(self, base_state: WatcherState) -> None:
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         # tempdown ON, cookend ON, rest OFF
         assert any("TempDown: AN" in l for l in lines)
         assert any("Cook-Ende: AN" in l for l in lines)
@@ -48,37 +54,37 @@ class TestAlertSummary:
 
     def test_tempdown_disabled(self, base_state: WatcherState) -> None:
         base_state.tempalert_tempdown_enabled = False
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("TempDown: AUS" in l for l in lines)
 
     def test_ruhephase_enabled_with_target(self, base_state: WatcherState) -> None:
         base_state.tempalert_ruhephase_enabled = True
         base_state.ruhephase_target_temp = 55.0
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Ruhephase: AN" in l and "55" in l for l in lines)
 
     def test_ruhephase_enabled_no_target(self, base_state: WatcherState) -> None:
         base_state.tempalert_ruhephase_enabled = True
         base_state.ruhephase_target_temp = None
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Ruhephase: AUS" in l for l in lines)
 
     def test_stall_enabled(self, base_state: WatcherState) -> None:
         base_state.tempalert_stall_enabled = True
         base_state.stall_max_rate = 2.0
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Stall: AN" in l and "< 2 C/h" in l for l in lines)
 
     def test_stall_already_alerted(self, base_state: WatcherState) -> None:
         base_state.tempalert_stall_enabled = True
         base_state.stall_alerted = True
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("bereits ausgeloest" in l for l in lines)
 
     def test_wrap_enabled(self, base_state: WatcherState) -> None:
         base_state.tempalert_wrap_enabled = True
         base_state.wrap_target_temp = 75.0
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Wrap-Reminder: AN" in l and "75" in l for l in lines)
 
     def test_wrap_muted_in_restphase(self, base_state: WatcherState) -> None:
@@ -86,7 +92,7 @@ class TestAlertSummary:
         base_state.wrap_target_temp = 75.0
         base_state.tempalert_ruhephase_enabled = True
         base_state.ruhephase_target_temp = 65.0
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Wrap-Reminder: AN" in l and "stumm in der Ruhephase" in l for l in lines)
 
     def test_stall_muted_in_restphase_hides_disturbance_pause(self, base_state: WatcherState) -> None:
@@ -94,7 +100,7 @@ class TestAlertSummary:
         base_state.stall_pause_checks_left = 2
         base_state.tempalert_ruhephase_enabled = True
         base_state.ruhephase_target_temp = 65.0
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         stall = next(l for l in lines if l.startswith("Stall: AN"))
         assert "stumm in der Ruhephase" in stall
         assert "Stoerung" not in stall
@@ -103,56 +109,56 @@ class TestAlertSummary:
         base_state.tempalert_wrap_enabled = True
         base_state.wrap_target_temp = 75.0
         base_state.wrap_alerted = True
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("bereits ausgeloest" in l for l in lines)
 
     def test_cookend_ended(self, base_state: WatcherState) -> None:
         base_state.tempalert_cookend_enabled = True
         base_state.cook_ended = True
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Cook beendet erkannt" in l for l in lines)
 
     def test_ambient_range_enabled(self, base_state: WatcherState) -> None:
         base_state.tempalert_ambient_range_enabled = True
         base_state.ambient_range_min = 100.0
         base_state.ambient_range_max = 130.0
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Ambient-Bereich: AN" in l and "100" in l and "130" in l for l in lines)
 
     def test_startup_test_call_enabled(self, base_state: WatcherState) -> None:
         base_state.startup_test_call_enabled = True
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Startup-Testanruf: AN" in l for l in lines)
 
     def test_startup_test_call_disabled(self, base_state: WatcherState) -> None:
         base_state.startup_test_call_enabled = False
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Startup-Testanruf: AUS" in l for l in lines)
 
     def test_check_interval_default(self, base_state: WatcherState) -> None:
         base_state.check_interval_override = None
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any(l == f"Check-Intervall: {watcher_settings.CHECK_INTERVAL}s" for l in lines)
 
     def test_check_interval_override(self, base_state: WatcherState) -> None:
         base_state.check_interval_override = 45
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Check-Intervall: 45s (override" in l for l in lines)
 
     def test_pull_override_off(self, base_state: WatcherState) -> None:
         base_state.target_override = None
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any(l == "Pull-Alert (rausnehmen): AUS" for l in lines)
 
     def test_pull_override_on(self, base_state: WatcherState) -> None:
         base_state.target_override = 90.0
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Pull-Alert (rausnehmen): AN" in l and "90" in l for l in lines)
 
     def test_pull_override_already_fired(self, base_state: WatcherState) -> None:
         base_state.target_override = 90.0
         base_state.target_reached_calls = 3
-        lines = status_text.alert_summary(base_state)
+        lines = _lines(status_text.alert_rows(base_state))
         assert any("Pull-Alert" in l and "bereits ausgeloest" in l for l in lines)
 
 
@@ -582,7 +588,7 @@ class TestHandleCommand:
     def test_pause_shown_in_summary(self, _save: MagicMock, base_state: WatcherState) -> None:
         base_state.pause_until = 1000.0 + 12 * 60
         with patch.object(timeutil, "now", return_value=1000.0):
-            lines = status_text.alert_summary(base_state)
+            lines = _lines(status_text.alert_rows(base_state))
         assert any(l.startswith("Pause: AKTIV (noch 12 Min.") for l in lines)
 
     @patch.object(watcher_state, "save_state")
@@ -607,7 +613,7 @@ class TestHandleCommand:
 
     @patch.object(watcher_state, "save_state")
     def test_pit_in_summary(self, _save: MagicMock, base_state: WatcherState) -> None:
-        assert "Smoker-Temp (Pit): 110 C (Standard)" in status_text.alert_summary(base_state)
+        assert "Smoker-Temp (Pit): 110 C (Standard)" in _lines(status_text.alert_rows(base_state))
 
     @patch.object(watcher_state, "save_state")
     def test_wrapped_anchors_endphase_and_reset_wrap_clears(self, _save: MagicMock, base_state: WatcherState) -> None:
@@ -890,6 +896,7 @@ class TestRunMeaterCheck:
         # The full status block (URL, alert summary, elapsed) is left out.
         assert "URL:" not in text
         assert "Elapsed:" not in text
+        assert mock_send.call_args.kwargs["html"].startswith("<p><strong>MEATER ETA: Brisket</strong></p><table>")
 
     def test_full_status_still_sends_screenshot(self, base_state: WatcherState) -> None:
         mock_send = MagicMock()
@@ -903,6 +910,9 @@ class TestRunMeaterCheck:
         assert image == "/tmp/test.png"
         assert "Remaining: 2h 30m" in text
         assert "Elapsed: 4h" in text
+        html = mock_send.call_args.kwargs["html"]
+        assert html.count("<table>") == 2  # readings + alert summary
+        assert "<tr><td><strong>Elapsed</strong></td><td>4h</td></tr>" in html
 
     def test_transient_error_never_ends_cook(self, base_state: WatcherState) -> None:
         # A CDP/timeout (our-side) error must NOT be mistaken for cook-end,
@@ -1099,7 +1109,7 @@ class TestRunMeaterCheck:
         base_state.tempalert_stall_enabled = True
         self._seed_internal(base_state, [70.0, 70.4, 70.8])
 
-        def _send(text: str, image: str | None) -> None:
+        def _send(text: str, image: str | None, *, html: str | None = None) -> None:
             if "STALL" in text:
                 raise RuntimeError("homeserver down")
 
@@ -1265,7 +1275,7 @@ class TestRunMeaterCheck:
 
     @staticmethod
     def _failing_send(needle: str) -> MagicMock:
-        def _send(text: str, image: str | None) -> None:
+        def _send(text: str, image: str | None, *, html: str | None = None) -> None:
             if needle in text:
                 raise RuntimeError("M_FORBIDDEN")
 
@@ -1390,6 +1400,9 @@ class TestRunMeaterCheck:
             assert _field(base_state, "offline_notified") is True
             mw.run_meater_check(base_state, send=send)
         assert sum("offline" in t for t in self._texts(send)) == 1
+        html = send.call_args.kwargs["html"]
+        assert html.startswith("<p><strong>⚠ MEATER Station offline")
+        assert "<td><strong>Time</strong></td>" in html
 
     def test_remaining_zero_shown_as_unknown(self, base_state: WatcherState) -> None:
         result, _ = self._run_with_send(base_state, MagicMock(), remaining_time="0m", remaining_minutes=0)
@@ -1429,15 +1442,15 @@ class TestRunMeaterCheck:
     def test_linear_forecast_capped(self, base_state: WatcherState) -> None:
         # 0.12 C/h over the last hour, 6 C to go -> 50 h -> "nicht absehbar"
         base_state.internal_samples = [[1_000_000.0 + i * 600, 90.0 + 0.02 * i] for i in range(7)]
-        line = status_text.forecast_line(base_state, 1_000_000.0 + 3600, 90.12, 96.0)
-        assert line is not None and "nicht absehbar" in line
+        row = status_text.forecast_row(base_state, 1_000_000.0 + 3600, 90.12, 96.0)
+        assert row is not None and row.value.startswith("nicht absehbar")
 
     def test_endphase_flat_window_capped(self, base_state: WatcherState) -> None:
         # 02.05.: core stood at 93 C for an hour -> ETA years ahead before the fix
         t0 = 1_000_000.0
         base_state.wrapped_at = t0 - 3 * 3600
         base_state.internal_samples = [[t0 - 2 * 3600 + i * 600, 93.0] for i in range(13)]
-        lines = status_text.endphase_lines(base_state, t0, 93.0, 94.0)
+        lines = _lines(status_text.endphase_rows(base_state, t0, 93.0, 94.0))
         assert len(lines) == 1 and lines[0].endswith("nicht absehbar (Kern steigt kaum)")
 
     def test_endphase_uses_pit_and_fixed_start(self, base_state: WatcherState) -> None:
@@ -1452,7 +1465,7 @@ class TestRunMeaterCheck:
         ]
         now = start + 18 * 600
         core = base_state.internal_samples[-1][1]
-        lines = status_text.endphase_lines(base_state, now, core, 96.0)
+        lines = _lines(status_text.endphase_rows(base_state, now, core, 96.0))
         expected = now + math.log((105.0 - core) / (105.0 - 96.0)) / 0.1 * 3600
         assert len(lines) == 1
         assert f"A=Pit 105 C, Fit {timeutil.clock(start, now)}-" in lines[0]
@@ -1471,7 +1484,7 @@ class TestRunMeaterCheck:
         curve[-1] -= 1.0
         base_state.internal_samples = [[start + i * 600, k] for i, k in enumerate(curve)]
         now = start + 18 * 600
-        lines = status_text.endphase_lines(base_state, now, curve[-1], 96.0)
+        lines = _lines(status_text.endphase_rows(base_state, now, curve[-1], 96.0))
         clean = 105.0 - 25.0 * math.exp(-0.3)
         expected = now + math.log((105.0 - clean) / (105.0 - 96.0)) / 0.1 * 3600
         assert len(lines) == 2
@@ -1500,7 +1513,7 @@ class TestRunMeaterCheck:
         start = 1_000_000.0
         curve = self._rest_state(base_state, start, 3)
         now = start + 1200 + 1200
-        lines = status_text.restphase_lines(base_state, now, curve[-1])
+        lines = _lines(status_text.restphase_rows(base_state, now, curve[-1]))
         assert len(lines) == 1 and "sammelt Daten" in lines[0] and "94.0 C" in lines[0]
 
     def test_restphase_forecast_from_peak(self, base_state: WatcherState) -> None:
@@ -1509,7 +1522,7 @@ class TestRunMeaterCheck:
         peak = start + 1200
         now = peak + 12 * 600
         with patch.object(status_text, "ROOM_TEMP", 22.0):
-            lines = status_text.restphase_lines(base_state, now, curve[-1])
+            lines = _lines(status_text.restphase_rows(base_state, now, curve[-1]))
         expected = now + math.log((curve[-1] - 22.0) / (65.0 - 22.0)) / 0.2 * 3600
         assert len(lines) == 1
         assert f"A=Umgebung 22 C, Fit {timeutil.clock(peak, now)}-" in lines[0]
@@ -1520,7 +1533,7 @@ class TestRunMeaterCheck:
         curve = self._rest_state(base_state, start, 13)
         base_state.wrapped_at = start - 6 * 3600
         now = start + 1200 + 12 * 600
-        lines = status_text.eta_lines(base_state, now, {}, curve[-1], 96.0)
+        lines = _lines(status_text.eta_rows(base_state, now, {}, curve[-1], 96.0))
         assert lines[1].startswith("Ruhephasen-Prognose")
         assert not any("Endphasen" in l or "Watcher-Prognose" in l for l in lines)
 
@@ -1528,16 +1541,16 @@ class TestRunMeaterCheck:
         start = 1_000_000.0
         curve = self._rest_state(base_state, start, 13)
         now = start + 1200 + 12 * 600
-        assert status_text.restphase_lines(base_state, now, 64.0) == []
+        assert _lines(status_text.restphase_rows(base_state, now, 64.0)) == []
         base_state.tempalert_ruhephase_enabled = False
-        assert status_text.restphase_lines(base_state, now, curve[-1]) == []
+        assert _lines(status_text.restphase_rows(base_state, now, curve[-1])) == []
 
     def test_restphase_config_default_needs_falling_core(self, base_state: WatcherState) -> None:
         # Enabled by config default (no 'enable ruhephase' time): silent while heating
         base_state.tempalert_ruhephase_enabled = True
         base_state.ruhephase_target_temp = 65.0
         base_state.internal_samples = [[1_000_000.0 + i * 600, 70.0 + i] for i in range(6)]
-        assert status_text.restphase_lines(base_state, 1_003_000.0, 75.0) == []
+        assert _lines(status_text.restphase_rows(base_state, 1_003_000.0, 75.0)) == []
 
     def test_resets_consecutive_errors_on_success(self, base_state: WatcherState) -> None:
         base_state.consecutive_errors = 2
@@ -1653,6 +1666,10 @@ class TestStartupGreeting:
         assert greeting_call[0][0] == "!room:test"
         assert "MEATER Watcher ist gestartet" in greeting_call[0][1]
         assert commands.HELP_TEXT in greeting_call[0][1]
+        # Rich form: the help as an HTML table, the greeting line kept
+        html = greeting_call.kwargs["html"]
+        assert html.startswith("Hallo! MEATER Watcher ist gestartet.<br><br><p><strong>")
+        assert "<code>enable pull &lt;temp&gt;</code>" in html
 
     def test_initial_check_runs_with_sender_after_connect(self) -> None:
         """The initial check runs with the messaging sender so it posts status + screenshot."""
