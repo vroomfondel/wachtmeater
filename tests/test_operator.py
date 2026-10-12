@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from loguru import logger
+from nio.crypto.device import DeviceStore, OlmDevice
 
 from wachtmeater import cfg
 from wachtmeater import operator as op
@@ -224,7 +225,11 @@ class TestFormatStatus:
 
 
 class TestTrustOwnDevices:
-    """``_trust_own_devices`` logs how many own devices are trusted and which are new."""
+    """``_trust_own_devices`` logs how many own devices are trusted, known and new.
+
+    Uses a real nio ``DeviceStore``: it has no ``__contains__`` (``user_id in
+    store`` is always False), which a plain dict fake would hide.
+    """
 
     BOT = "@bot:matrix.example.com"
 
@@ -237,37 +242,46 @@ class TestTrustOwnDevices:
         logger.remove(sink)
         logger.disable("wachtmeater")
 
-    def _handler(self, devices: dict[str, bool], newly_seen: dict[str, bool] | None = None) -> MagicMock:
-        """Fake handler: *devices* known before, *newly_seen* appear with the key query; trust verifies all."""
-        store: dict[str, dict[str, MagicMock]] = {self.BOT: {}} if devices else {}
-        verified: dict[str, bool] = {}
-        for device_id, ok in devices.items():
-            store[self.BOT][device_id] = MagicMock(id=device_id)
-            verified[device_id] = ok
+    def _handler(
+        self, trusted: list[str], untrusted: list[str], newly_seen: tuple[str, ...] = (), trust_works: bool = True
+    ) -> MagicMock:
+        """Fake handler on a real DeviceStore; *newly_seen* devices appear with the key query."""
+        store = DeviceStore()
+        verified = set(trusted)
+
+        def add(device_id: str) -> None:
+            store.add(OlmDevice(self.BOT, device_id, {"ed25519": f"ed-{device_id}", "curve25519": f"cu-{device_id}"}))
+
+        for device_id in [*trusted, *untrusted]:
+            add(device_id)
 
         async def trust(user_id: str) -> None:
-            store.setdefault(user_id, {})
-            for device_id in newly_seen or {}:
-                store[user_id][device_id] = MagicMock(id=device_id)
-            for device_id in store[user_id]:
-                verified[device_id] = True
+            for device_id in newly_seen:
+                add(device_id)
+            if trust_works:
+                verified.update(device.id for device in store.active_user_devices(user_id))
 
         handler = MagicMock()
         handler.client.device_store = store
-        handler.client.is_device_verified = lambda device: verified.get(device.id, False)
+        handler.client.is_device_verified = lambda device: device.id in verified
         handler.trust_devices_for_user = AsyncMock(side_effect=trust)
         return handler
 
     def test_counts_all_and_lists_new_devices(self, logs: list[str]) -> None:
-        handler = self._handler({"OPERATOR": True, "WATCHER": False}, newly_seen={"NEWPOD": False})
+        handler = self._handler(["OPERATOR"], ["WATCHER"], newly_seen=("NEWPOD",))
         asyncio.run(op._trust_own_devices(handler, self.BOT))
         handler.trust_devices_for_user.assert_awaited_once_with(self.BOT)
-        assert logs == [f"Operator: vertraut 3 Device(s) von {self.BOT}, davon neu: NEWPOD, WATCHER"]
+        assert logs == [f"Operator: vertraut 3 von 3 Device(s) von {self.BOT}, davon neu: NEWPOD, WATCHER"]
 
     def test_nothing_new(self, logs: list[str]) -> None:
-        asyncio.run(op._trust_own_devices(self._handler({"OPERATOR": True}), self.BOT))
-        assert logs == [f"Operator: vertraut 1 Device(s) von {self.BOT}, keine neuen"]
+        asyncio.run(op._trust_own_devices(self._handler(["OPERATOR"], []), self.BOT))
+        assert logs == [f"Operator: vertraut 1 von 1 Device(s) von {self.BOT}, keine neuen"]
 
     def test_user_not_in_store_yet(self, logs: list[str]) -> None:
-        asyncio.run(op._trust_own_devices(self._handler({}, newly_seen={"FIRST": False}), self.BOT))
-        assert logs == [f"Operator: vertraut 1 Device(s) von {self.BOT}, davon neu: FIRST"]
+        asyncio.run(op._trust_own_devices(self._handler([], [], newly_seen=("FIRST",)), self.BOT))
+        assert logs == [f"Operator: vertraut 1 von 1 Device(s) von {self.BOT}, davon neu: FIRST"]
+
+    def test_shows_when_trusting_fails(self, logs: list[str]) -> None:
+        # minimatrix 0.0.16 trusts nothing (``user_id not in device_store`` is always True)
+        asyncio.run(op._trust_own_devices(self._handler([], ["OPERATOR", "WATCHER"], trust_works=False), self.BOT))
+        assert logs == [f"Operator: vertraut 0 von 2 Device(s) von {self.BOT}, keine neuen"]

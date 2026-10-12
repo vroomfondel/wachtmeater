@@ -275,7 +275,7 @@ def _format_status(state: OperatorState) -> str:
 
 
 async def _trust_own_devices(handler: MatrixClientHandler, user_id: str) -> None:
-    """Trust all devices of *user_id* and log how many there are and which are new.
+    """Trust all devices of *user_id* and log how many are trusted, known and new.
 
     Args:
         handler: The minimatrix client handler of the operator.
@@ -284,15 +284,18 @@ async def _trust_own_devices(handler: MatrixClientHandler, user_id: str) -> None
     nio_client = handler.client
 
     def verified() -> set[str]:
-        devices = nio_client.device_store[user_id] if user_id in nio_client.device_store else {}
-        return {device_id for device_id, device in devices.items() if nio_client.is_device_verified(device)}
+        # nio's DeviceStore has no __contains__ (iterating yields devices), so
+        # ``user_id in device_store`` is always False — ask for the devices directly.
+        devices = nio_client.device_store.active_user_devices(user_id)
+        return {device.id for device in devices if nio_client.is_device_verified(device)}
 
     before = verified()
     await handler.trust_devices_for_user(user_id)
     after = verified()
+    known = len(list(nio_client.device_store.active_user_devices(user_id)))
     new = sorted(after - before)
     logger.info(
-        f"Operator: vertraut {len(after)} Device(s) von {user_id}"
+        f"Operator: vertraut {len(after)} von {known} Device(s) von {user_id}"
         + (f", davon neu: {', '.join(new)}" if new else ", keine neuen")
     )
 
