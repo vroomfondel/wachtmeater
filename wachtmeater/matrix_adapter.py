@@ -30,7 +30,7 @@ read_dot_env_to_environ()
 
 from loguru import logger
 
-from minimatrix.cross_signing import ensure_device_cross_signed
+from minimatrix.cross_signing import CrossSigningKeys, ensure_device_cross_signed
 from minimatrix.matrix_client import MatrixClientHandler
 
 CROSS_SIGNING_SEED_INFO: str = "wachtmeater cross-signing {usage}"
@@ -91,14 +91,21 @@ class MatrixMessagingAdapter:
         just flagged as sent from an unverified device.
         """
         secret = cfg.matrix.cross_signing_secret
-        if not secret:
-            self.logger.info("Cross-Signing aus (matrix.cross_signing_secret nicht gesetzt)")
-            return
         client = self._handler.client
+        if not secret:
+            self.logger.warning(
+                f"Cross-Signing AUS (matrix.cross_signing_secret nicht gesetzt): Geraet {client.device_id} "
+                "bleibt unsigniert, Clients markieren Bot-Nachrichten als unverifiziert"
+            )
+            return
+        master = CrossSigningKeys.from_secret(secret, CROSS_SIGNING_SEED_INFO).master.public_key
+        self.logger.info(f"Cross-Signing AN: {client.user_id} Geraet {client.device_id}, Master-Key {master}")
         try:
             if client.should_upload_keys:
+                self.logger.info("Cross-Signing: Geraeteschluessel werden zuerst hochgeladen")
                 await client.keys_upload()
-            await ensure_device_cross_signed(client, secret, CROSS_SIGNING_SEED_INFO)
+            summary = await ensure_device_cross_signed(client, secret, CROSS_SIGNING_SEED_INFO)
+            self.logger.info(f"Cross-Signing OK: {summary}")
         except Exception as e:
             self.logger.error(f"Cross-Signing fehlgeschlagen: {e}")
 

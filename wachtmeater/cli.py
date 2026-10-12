@@ -138,6 +138,8 @@ def main() -> None:
     os.environ.setdefault("LOGURU_LEVEL", "DEBUG")
     configure_logging()
     glogger.enable("wachtmeater")
+    # Cross-signing requests/results are logged by minimatrix (library logging is off by default).
+    glogger.enable("minimatrix.cross_signing")
 
     read_dot_env_to_environ()
     print_banner()

@@ -20,6 +20,16 @@ transport     = "tls"
 srtp          = "mandatory"
 user          = "1234"
 password      = "changeme"
+# Anruf-Ablauf (Sekunden): Pause vor/nach dem Anruf und zwischen Wiederholungen
+call_pre_delay           = 1.0
+call_post_delay          = 1.0
+call_inter_delay         = 2.1
+# Wie oft die Ansage im Anruf wiederholt wird
+call_repeat_announcement = 2
+call_transcribe          = true
+# Sekunden Stille abwarten, bevor aufgelegt wird
+call_wait_for_silence    = 2.0
+call_verbose             = true
 
 
 [monitoring]
@@ -82,6 +92,11 @@ pitmaster_admin_in_cook_room = true
 # er jedes eigene Geraet beim Login (sonst zeigt Element ein rotes "!" an seinen
 # Nachrichten). Fuer Operator und Watcher gleich setzen; leer = aus.
 # cross_signing_secret = ""
+# Raum, in dem der Operator ("wachtmeater operator") auf Befehle hoert
+# operator_listening_room = "!operatorroom:matrix.example.com"
+operator_listening_room = ""
+# Eigener Crypto-Store fuer den Operator (kein SQLite-Konflikt mit Watcher-Pods)
+operator_crypto_store_path = "/data/operator_crypto_store"
 
 [auth]
 method              = "jwt"
