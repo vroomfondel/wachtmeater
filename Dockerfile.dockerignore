@@ -1,0 +1,16 @@
+# Dockerfile-specific ignore file (preferred over .dockerignore by BuildKit and Podman/Buildah).
+# Allowlist: only what the Dockerfile COPYs from the build context.
+*
+!runcli.sh
+!requirements.txt
+!README.md
+!pyproject.toml
+!wachtmeater.toml.example
+!wachtmeater
+!wachtmeater/**
+
+# never send these, even below allowed paths
+**/__pycache__
+**/*.local
+**/*.local.*
+**/docker-config

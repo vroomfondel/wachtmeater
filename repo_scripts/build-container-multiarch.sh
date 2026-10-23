@@ -30,13 +30,17 @@ readonly BUILD_BASE_ARGS=(
   "--build-arg" "debian_version=${DEBIAN_VERSION}"
   )
 
+# Podman-only: make sure the Dockerfile-specific ignore file is also used for remote builds.
+# Docker buildx picks up <Dockerfile>.dockerignore automatically and has no --ignorefile flag.
+readonly PODMAN_EXTRA_ARGS=("--ignorefile" "${DOCKERFILE}.dockerignore")
+
 # podman machine ssh df -h
 # podman --connection podman-machine-default system prune -a
 # podman --connection podman-machine-default system df
 # podman machine inspect podman-machine-default | grep -i disk
 
 
-readonly BUILD_SCRIPT_VERSION="2026-02-23_11:11:11"
+readonly BUILD_SCRIPT_VERSION="2026-10-23_10:20:45"
 
 # Runtime state
 PODMAN_VM_STARTED=0
@@ -288,8 +292,7 @@ build_with_podman() {
     ensure_remote_arm64_connection
   fi
 
-  # Add latest tag if not already latest
-  local -a build_args=("${BUILD_BASE_ARGS[@]}")
+  local -a build_args=("${BUILD_BASE_ARGS[@]}" "${PODMAN_EXTRA_ARGS[@]}")
 
   # Build for each platform (in parallel)
   for platform in "${PLATFORMS[@]}"; do
@@ -434,6 +437,9 @@ build_local_only() {
 
   local -a build_args=("${BUILD_BASE_ARGS[@]}")
   build_args+=("--platform" "${native_platform}")
+  if (( DOCKER_IS_PODMAN == 1 )); then
+    build_args+=("${PODMAN_EXTRA_ARGS[@]}")
+  fi
   if [[ -n "${DOCKER_IMAGE_LATEST}" && "${DOCKER_IMAGE}" != *:latest ]]; then
     build_args+=("-t" "${DOCKER_IMAGE_LATEST}")
   fi
